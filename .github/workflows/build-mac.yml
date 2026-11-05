@@ -1,0 +1,44 @@
+# Builds EX Workbench for macOS (Apple Silicon + Intel) as AU, VST3 and a standalone app, every time
+# something is pushed. Download the result from the run's "Artifacts" section (or from a Release, for tags).
+name: Build macOS plugin
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: cmake --build build --config Release --target EXWorkbench_AU EXWorkbench_VST3 EXWorkbench_Standalone -- -quiet
+
+      - name: Sign (ad-hoc) and package
+        run: |
+          set -e
+          A="build/EXWorkbench_artefacts/Release"
+          mkdir -p dist
+          cp -R "$A/AU/EX Workbench.component" dist/
+          cp -R "$A/VST3/EX Workbench.vst3" dist/
+          cp -R "$A/Standalone/EX Workbench.app" dist/
+          for b in dist/*.component dist/*.vst3 dist/*.app; do codesign --force --deep --sign - "$b"; done
+          cp packaging/Install.command packaging/README.txt dist/
+          chmod +x dist/Install.command
+          cd dist && ditto -c -k --keepParent . "../EX-Workbench-mac.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EX-Workbench-mac
+          path: EX-Workbench-mac.zip
+
+      - name: Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: EX-Workbench-mac.zip

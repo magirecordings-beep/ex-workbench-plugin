@@ -1,0 +1,57 @@
+// Drives the real plugin processor (no host, no UI): loads the bank from saved state, plays notes, checks the output.
+#include <JuceHeader.h>
+#include "../Source/PluginProcessor.h"
+#include <cmath>
+#include <cstdio>
+#include <thread>
+extern juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
+static double rms (juce::AudioBuffer<float>& b) { double e = 0; for (int c = 0; c < b.getNumChannels(); ++c) for (int i = 0; i < b.getNumSamples(); ++i) e += b.getSample (c, i) * b.getSample (c, i); return std::sqrt (e / (b.getNumChannels() * b.getNumSamples())); }
+int main (int argc, char** argv) {
+    juce::ScopedJuceInitialiser_GUI init;
+    std::unique_ptr<juce::AudioProcessor> p (createPluginFilter());
+    auto* proc = dynamic_cast<ExwProcessor*> (p.get());
+    p->setPlayConfigDetails (0, 2, 48000, 512); p->prepareToPlay (48000, 512);
+    juce::String bank = argc > 1 ? argv[1] : "/tmp/claude-0/pool/x/Xtreme_Lead-1.exb";
+    proc->loadBankAsync (juce::File (bank), 2);
+    for (int k = 0; k < 600 && (proc->isLoading() || ! proc->currentBank()); ++k) { juce::Thread::sleep (20); 
+        juce::AudioBuffer<float> b (2, 512); juce::MidiBuffer m; p->processBlock (b, m); }
+    auto b = proc->currentBank();
+    printf ("status: %s | presets %d | program %d '%s'\n", proc->bankStatus().toRawUTF8(), p->getNumPrograms(), p->getCurrentProgram(), p->getProgramName (p->getCurrentProgram()).toRawUTF8());
+    auto play = [&] (const char* label, std::vector<int> notes) {
+        juce::AudioBuffer<float> buf (2, 512); double tot = 0; int blocks = 90;
+        for (int k = 0; k < blocks; ++k) {
+            juce::MidiBuffer m; buf.clear();
+            if (k == 0) for (int n : notes) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 10);
+            if (k == 60) for (int n : notes) m.addEvent (juce::MidiMessage::noteOff (1, n), 0);
+            p->processBlock (buf, m); tot += rms (buf);
+        }
+        printf ("%-34s avg rms %.4f  notes now %d\n", label, tot / blocks, proc->notesPlaying());
+    };
+    play ("preset 3 chord", { 48, 55, 60 });
+    p->setCurrentProgram (0); { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p->processBlock (x, m); }
+    printf ("after setCurrentProgram(0): %d '%s'\n", p->getCurrentProgram(), p->getProgramName (p->getCurrentProgram()).toRawUTF8());
+    play ("preset 1 single", { 60 });
+    proc->params.getParameter ("uniOn")->setValueNotifyingHost (1.0f);
+    play ("preset 1 unison", { 60 });
+    // program change via MIDI
+    { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::programChange (1, 9), 0); p->processBlock (x, m); }
+    printf ("after MIDI program change 10: %d '%s'\n", p->getCurrentProgram(), p->getProgramName (p->getCurrentProgram()).toRawUTF8());
+    // knob via CC21 then save/restore state into a new instance
+    { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::controllerEvent (1, 21, 99), 0); p->processBlock (x, m); }
+    juce::MemoryBlock mb; p->getStateInformation (mb);
+    printf ("state %zu bytes, knob A now %.3f\n", mb.getSize(), proc->knob (0));
+    std::unique_ptr<juce::AudioProcessor> p2 (createPluginFilter()); auto* proc2 = dynamic_cast<ExwProcessor*> (p2.get());
+    p2->setPlayConfigDetails (0, 2, 48000, 512); p2->prepareToPlay (48000, 512);
+    p2->setStateInformation (mb.getData(), (int) mb.getSize());
+    for (int k = 0; k < 600 && (proc2->isLoading() || ! proc2->currentBank()); ++k) { juce::Thread::sleep (20); }
+    for (int k = 0; k < 3; ++k) { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p2->processBlock (x, m); }
+    printf ("restored: program %d '%s' uniOn %.0f knob A %.3f (shared bank: %s)\n", p2->getCurrentProgram(), p2->getProgramName (p2->getCurrentProgram()).toRawUTF8(),
+            proc2->params.getRawParameterValue ("uniOn")->load(), proc2->knob (0), proc2->currentBank() == proc->currentBank() ? "yes" : "no");
+    // timing: how long 10 s of an 8-note unison chord takes to render
+    proc->params.getParameter ("uniVoices")->setValueNotifyingHost (1.0f);
+    auto t0 = juce::Time::getMillisecondCounterHiRes(); juce::AudioBuffer<float> buf (2, 512);
+    for (int k = 0; k < 940; ++k) { juce::MidiBuffer m; buf.clear(); if (k == 0) for (int n : { 36, 43, 48, 55, 60, 64, 67, 72 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); p->processBlock (buf, m); }
+    printf ("10 s of 8-note 8-voice unison chord rendered in %.0f ms (%.1f%% of real time, one core)\n", juce::Time::getMillisecondCounterHiRes() - t0, (juce::Time::getMillisecondCounterHiRes() - t0) / 100.0);
+    p2.reset(); p.reset();
+    return 0;
+}
