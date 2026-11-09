@@ -1,11 +1,14 @@
 # Builds Xtreme Lab on GitHub's machines every time something is pushed:
 #   macOS  (Apple Silicon + Intel): AU, VST3 and a standalone app  -> Xtreme-Lab-mac.zip
 #   Windows (64-bit):               VST3 and a standalone app      -> Xtreme-Lab-windows.zip
-# Download them from the run's "Artifacts" section (or from a Release, for tags like v0.2.0).
+# Download them from the run's "Artifacts" section, or from the Releases page (publishing a release builds and attaches both).
 name: Build Xtreme Lab
 
 on:
   push:
+    branches: ['**']
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
