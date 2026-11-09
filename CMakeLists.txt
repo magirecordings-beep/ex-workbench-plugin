@@ -73,6 +73,8 @@ target_link_libraries(XtremeLab
 # offline engine test (not part of the plugin)
 add_executable(exw_render_test EXCLUDE_FROM_ALL tests/render_test.cpp Source/engine/Bank.cpp Source/engine/Engine.cpp)
 
+add_executable(exw_click_test EXCLUDE_FROM_ALL tests/click_test.cpp Source/engine/Bank.cpp Source/engine/Engine.cpp)
+
 # drives the real processor without a host (Linux/macOS developer check)
 add_executable(exw_proc_test EXCLUDE_FROM_ALL tests/proc_test.cpp)
 target_link_libraries(exw_proc_test PRIVATE XtremeLab)

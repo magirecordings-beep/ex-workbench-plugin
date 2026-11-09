@@ -288,7 +288,9 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
 
 void Engine::releaseVoice (NoteVoice& nv) {
     if (! nv.active || nv.releasing) return;
-    nv.releasing = true; nv.envRel = true; nv.relFrom = envLevel (nv); nv.relT = 0;
+    // the level to release from must be read while the envelope is still in its attack/decay/sustain part
+    const float from = envLevel (nv);
+    nv.releasing = true; nv.envRel = true; nv.relFrom = from; nv.relT = 0;
     for (auto& me : nv.menv) if (me.n) { me.rel = true; me.relFrom = me.v; me.relT = 0; }
 }
 
