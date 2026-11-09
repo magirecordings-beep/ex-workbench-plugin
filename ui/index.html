@@ -71,7 +71,7 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
 .status{font-size:11px;color:var(--muted);max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .prog{height:4px;border-radius:2px;background:#050506;overflow:hidden;width:180px}
 .prog i{display:block;height:100%;background:var(--accent);width:0}
-.mods{display:grid;grid-template-columns:1fr 1.25fr 1.25fr;gap:8px}
+.mods{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .card{border-radius:5px;background:repeating-linear-gradient(90deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),linear-gradient(180deg,#303236,#25272b);border:1px solid #4e5157;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 2px 5px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:0}
 .card .pb{gap:10px}
 .lbtn{font:700 10px/1 var(--f-body);padding:4px 7px 4px 16px;border-radius:3px;color:#aeb3ba;position:relative;background:linear-gradient(180deg,#2c2e32,#1b1c1f);border-color:#4b4e54}
@@ -125,6 +125,9 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
 .page{display:grid;gap:8px;min-height:0;align-content:start}
 .page[hidden]{display:none}
 .voicepage{grid-template-rows:auto auto}
+.playpage{grid-template-columns:1fr 1fr;align-items:start}
+#arp-led{background:#4a1512;box-shadow:none}
+#arp-led.on{background:radial-gradient(circle at 40% 35%,#ff7a6e,#e3140c 55%,#8e0a05);box-shadow:0 0 6px rgba(255,40,30,.65)}
 /* library tabs */
 .ltabs{display:flex;gap:4px}
 .ltabs button{flex:1;padding:3px 6px;font-size:12px}
@@ -197,7 +200,7 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
           <div class="kcell" id="k-master"></div>
         </div>
       </div>
-      <div class="pages" role="tablist"><button type="button" class="ptab" role="tab" data-page="patch">Patch<small>layers · sources</small></button><button type="button" class="ptab" role="tab" data-page="voice">Voice<small>filter · performance · analog · controllers</small></button><button type="button" class="ptab" role="tab" data-page="fx">Effects<small>reverb · delay · chorus · drive · EQ</small></button></div>
+      <div class="pages" role="tablist"><button type="button" class="ptab" role="tab" data-page="patch">Patch<small>layers · sources</small></button><button type="button" class="ptab" role="tab" data-page="voice">Voice<small>filter · analog · controllers</small></button><button type="button" class="ptab" role="tab" data-page="play">Play<small>keys · glide · arpeggiator</small></button><button type="button" class="ptab" role="tab" data-page="fx">Effects<small>reverb · delay · chorus · drive · EQ</small></button></div>
       <div class="page" data-pg="patch" hidden>
         <section class="card"><div class="ph"><span class="led"></span><h2>Patch</h2><input class="pt-name" id="pt-name" aria-label="Patch name" maxlength="40"><span class="pt-state" id="pt-state"></span><span class="grow"></span>
             <button type="button" class="primary" id="pt-save">Save patch</button><button type="button" id="pt-new">New from preset</button><button type="button" id="pt-del">Delete</button><button type="button" id="pt-leave">Back to presets</button></div>
@@ -234,10 +237,7 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
             <div class="fxsec" data-fxb="4" hidden><div class="btnrow"><span class="cap">Style</span><div class="seg" data-param="drStyle" data-opts="A · tape,E · console,N · transformer,T · triode,P · pentode" style="min-width:460px"></div><button type="button" class="lbtn" data-toggle="drPunish" title="+20 dB more drive">PUNISH</button><button type="button" class="lbtn" data-toggle="drAuto" title="Keep the level steady as Drive changes">AUTO</button><button type="button" class="lbtn" data-toggle="drThump" title="Resonant bump at the low cut">THUMP</button><button type="button" class="lbtn" data-toggle="drSteep" title="Steeper high cut">STEEP</button></div><div class="kgrid" id="dr-knobs"></div></div>
           </div></section>
       </div>
-      <div class="page voicepage" data-pg="voice">
-      <div class="mods">
-        <section class="card"><div class="ph"><span class="led"></span><h2>Filter</h2><span class="sub">moves the preset's own filters</span></div>
-          <div class="pb"><div class="kgrid" id="filt-knobs"></div><p class="note">Centre = as the preset. Cutoff shifts every voice's filter in octaves; Resonance adds or takes away.</p></div></section>
+      <div class="page playpage" data-pg="play" hidden>
         <section class="card"><div class="ph"><span class="led"></span><h2>Performance</h2></div>
           <div class="pb">
             <div class="srow"><span>Keys</span><div class="seg" data-param="keys" data-opts="Preset,Poly,Mono,Legato"></div></div>
@@ -245,6 +245,21 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
             <div class="srow"><span>Bend</span><div class="seg" data-param="bendOwn" data-opts="Fixed range,Preset's own" data-vals="0,1"></div></div>
             <div class="kgrid" id="perf-knobs"></div>
           </div></section>
+        <section class="card"><div class="ph"><span class="led" id="arp-led"></span><h2>Arpeggiator</h2><span class="sub" id="arp-held"></span><span class="grow"></span><div class="seg" data-param="arpMode" data-opts="Off,On,Latch" style="min-width:220px"></div></div>
+          <div class="pb">
+            <div class="srow"><span>Pattern</span><select class="psel" data-psel="arpPattern"><option value="0">Up</option><option value="1">Down</option><option value="2">Up and down</option><option value="3">Down and up</option><option value="4">As played</option><option value="5">Random</option><option value="6">Chord repeat</option></select></div>
+            <div class="srow"><span>Rate</span><div class="seg" data-param="arpRate" data-opts="1/4,1/8,1/8 T,1/16,1/16 T,1/32"></div></div>
+            <div class="srow"><span>Octaves</span><div class="seg" data-param="arpOct" data-opts="1,2,3,4" data-vals="1,2,3,4"></div></div>
+            <div class="srow"><span>Tempo</span><div class="seg" data-param="arpSync" data-opts="Follow the host,Own tempo" data-vals="0,1"></div></div>
+            <div class="kgrid" id="arp-knobs"></div>
+            <p class="note">Hold keys and the arpeggiator plays them in time with your project. Latch keeps it going after you let go; a new chord replaces it.</p>
+          </div></section>
+      </div>
+      <div class="page voicepage" data-pg="voice">
+      <div class="mods">
+        <section class="card"><div class="ph"><span class="led"></span><h2>Filter</h2><span class="sub">moves the preset's own filters</span></div>
+          <div class="pb"><div class="kgrid" id="filt-knobs"></div><p class="note">Centre = as the preset. Cutoff shifts every voice's filter in octaves; Resonance adds or takes away.</p></div></section>
+
         <section class="card"><div class="ph"><span class="led"></span><h2>Analog</h2><span class="grow"></span><button type="button" class="lbtn" data-toggle="colMono" title="Below 120 Hz both sides play as one">MONO BASS</button><button type="button" class="lbtn" data-toggle="colOn">ON</button></div>
           <div class="pb"><div class="kgrid" id="col-knobs"></div><p class="note">Warmth, weight and sub on the whole output.</p></div></section>
       </div>
@@ -305,6 +320,9 @@ function paramKnob(boxSel, id, label, min, max, step, fmt, extra) {
 paramKnob('#perf-knobs', 'glideMs', 'Glide time', 5, 2000, 1, v => Math.round(v) + ' ms');
 paramKnob('#perf-knobs', 'bendRange', 'Bend range', 0, 24, 1, v => v ? '±' + v + ' st' : 'off');
 const sg = x => x > 0 ? '+' : x < 0 ? '−' : '±';
+paramKnob('#arp-knobs', 'arpGate', 'Gate', 5, 100, 1, v => Math.round(v) + '%');
+paramKnob('#arp-knobs', 'arpSwing', 'Swing', 0, 75, 1, v => v ? Math.round(v) + '%' : 'off');
+paramKnob('#arp-knobs', 'arpTempo', 'Own tempo', 40, 240, 1, v => Math.round(v) + ' BPM');
 paramKnob('#filt-knobs', 'cutShift', 'Cutoff shift', -9, 9, .01, v => sg(v) + Math.abs(v).toFixed(1) + ' oct', { def: 0 });
 paramKnob('#filt-knobs', 'resShift', 'Resonance', -100, 100, 1, v => sg(v) + Math.abs(Math.round(v)) + '%', { def: 0 });
 paramKnob('#col-knobs', 'colWarmth', 'Warmth', 0, 100, 1, v => Math.round(v) + '%');
@@ -324,6 +342,7 @@ document.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('clic
 function renderDim() {
   PK.glideMs.kn.classList.toggle('dim', st.params.glideMode !== 2); PK.bendRange.kn.classList.toggle('dim', st.params.bendOwn > .5);
   ['colWarmth', 'colWeight', 'colSub', 'colSmooth'].forEach(k => PK[k].kn.classList.toggle('dim', !(st.params.colOn > .5)));
+  PK.arpTempo.kn.classList.toggle('dim', !(st.params.arpSync > .5));
 }
 function renderParams() {
   for (const [id, k] of Object.entries(PK)) if (st.params[id] !== undefined) k.set(st.params[id]);
@@ -583,6 +602,7 @@ function onMsg(m) {
     $('#prog').hidden = !m.loading; $('#prog-i').style.width = Math.round((m.progress || 0) * 100) + '%';
     if (m.loading) $('#status').textContent = m.status; else if (/^(Couldn|No |Found|Not an|Bank not)/.test(m.status || '')) $('#status').textContent = m.status;
     if (m.knobs) { st.knobs = m.knobs; CK.forEach((k, i) => k && k.set(Math.round(m.knobs[i] * 127))); }
+    if ('arp' in m) { const on = st.params.arpMode > .5; $('#arp-held').textContent = !on ? '' : m.arp ? m.arp + ' key' + (m.arp > 1 ? 's' : '') + ' held' : 'hold some keys'; $('#arp-led').classList.toggle('on', on && m.arp > 0 && m.notes > 0); }
     if (m.params) { Object.assign(st.params, m.params); renderParams(); }
   }
 }

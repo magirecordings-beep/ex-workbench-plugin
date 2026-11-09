@@ -116,7 +116,7 @@ void ExwEditor::timerCallback() {
         float v = r->convertFrom0to1 (r->getValue()); auto id = r->getParameterID();
         if (sentParams[id] != v) { sentParams[id] = v; changed->setProperty (id, v); any = true; }
     }
-    auto msg = obj ({ { "type", "status" }, { "notes", proc.notesPlaying() }, { "players", proc.playersPlaying() }, { "loading", proc.isLoading() }, { "progress", proc.loadProgress() }, { "status", proc.bankStatus() } });
+    auto msg = obj ({ { "type", "status" }, { "notes", proc.notesPlaying() }, { "players", proc.playersPlaying() }, { "arp", proc.arpKeys() }, { "loading", proc.isLoading() }, { "progress", proc.loadProgress() }, { "status", proc.bankStatus() } });
     if (knobsMoved) msg.getDynamicObject()->setProperty ("knobs", knobs);
     if (any) msg.getDynamicObject()->setProperty ("params", juce::var (changed)); else delete changed;
     send (msg);

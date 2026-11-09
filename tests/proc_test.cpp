@@ -1,6 +1,7 @@
 // Drives the real plugin processor (no host, no UI): loads the bank from saved state, plays notes, checks the output.
 #include <JuceHeader.h>
 #include "../Source/PluginProcessor.h"
+#include "../Source/Arp.h"
 #include <cmath>
 #include <cstdio>
 #include <thread>
@@ -69,6 +70,21 @@ int main (int argc, char** argv) {
     for (int t = 0; t < 5; ++t) { setp ("fxbType", (float) t); tail ((juce::String ("FX B send: ") + names[t]).toRawUTF8()); }
     setp ("sendB", 0); setp ("fxbIns", 1); setp ("fxbType", 4); setp ("drDrive", 8); tail ("FX B insert: drive 8");
     setp ("fxbIns", 0); setp ("sendA", 20);
+    { // arpeggiator on its own: hold C-E-G for 2 s at 120 BPM in 1/16, up, 2 octaves, swing 50
+        Arp a; a.prepare (48000); Arp::Params ap; ap.mode = 1; ap.rate = 3; ap.oct = 2; ap.swing = 50; ap.gate = 50;
+        int ons = 0, offs = 0; std::vector<int> seq; std::vector<int> times; int t = 0;
+        for (int k = 0; k < 188; ++k) {
+            juce::MidiBuffer m;
+            if (k == 0) for (int n : { 48, 52, 55 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 100);
+            if (k == 187) for (int n : { 48, 52, 55 }) m.addEvent (juce::MidiMessage::noteOff (1, n), 0);
+            a.process (m, 512, ap, 120, std::nullopt, false);
+            for (auto e : m) { auto mm = e.getMessage(); if (mm.isNoteOn()) { ++ons; if (seq.size() < 8) { seq.push_back (mm.getNoteNumber()); times.push_back (t + e.samplePosition); } } else if (mm.isNoteOff()) ++offs; }
+            t += 512;
+        }
+        printf ("arp: %d note-ons, %d note-offs in 2 s (expect ~16); first notes", ons, offs);
+        for (size_t i = 0; i < seq.size(); ++i) printf (" %d@%.0fms", seq[i], times[i] / 48.0);
+        printf ("\n");
+    }
     // timing: how long 10 s of an 8-note chord takes to render
 
     auto t0 = juce::Time::getMillisecondCounterHiRes(); juce::AudioBuffer<float> buf (2, 512);

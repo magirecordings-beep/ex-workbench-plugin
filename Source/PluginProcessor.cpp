@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Fx.h"
+#include "Arp.h"
 
 namespace {
 const char* AP_LETTERS = "ABCDEFGHIJKLMNOP";
@@ -31,6 +32,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
     f ("colWeight", "Weight", 0, 100, 40, 1, "%");
     f ("colSub", "Sub", 0, 100, 25, 1, "%");
     f ("colSmooth", "Smooth", 0, 100, 20, 1, "%");
+    // arpeggiator
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpMode", 1 }, "Arpeggiator", StringArray { "Off", "On", "Latch" }, 0));
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpPattern", 1 }, "Arp pattern", StringArray { "Up", "Down", "Up and down", "Down and up", "As played", "Random", "Chord repeat" }, 0));
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpRate", 1 }, "Arp rate", StringArray { "1/4", "1/8", "1/8 triplet", "1/16", "1/16 triplet", "1/32" }, 3));
+    l.add (std::make_unique<AudioParameterInt> (ParameterID { "arpOct", 1 }, "Arp octaves", 1, 4, 1));
+    f ("arpGate", "Arp gate", 5, 100, 60, 1, "%");
+    f ("arpSwing", "Arp swing", 0, 75, 0, 1, "%");
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpSync", 1 }, "Arp tempo", StringArray { "Host", "Own" }, 0));
+    f ("arpTempo", "Arp own tempo", 40, 240, 120, 1, "BPM");
     // effects (FX A reverb, FX B, sends, master EQ)
     for (auto& d : xfx::paramDefs()) {
         if (d.choices && juce::String (d.choices) == "bool") l.add (std::make_unique<AudioParameterBool> (ParameterID { d.id, 1 }, d.name, d.def > .5f));
@@ -47,6 +57,7 @@ ExwProcessor::ExwProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       params (*this, nullptr, "EXW", layout()) {
     fxRack = std::make_unique<xfx::FxRack> (params);
+    arp = std::make_unique<Arp>();
     engine.setFxHook (fxRack.get());
     for (auto* p : getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p)) params.addParameterListener (r->getParameterID(), this);
     for (int i = 0; i < 16; ++i) { knobVals[(size_t) i] = 0; lastKnobParam[(size_t) i] = -1; restoreKnobs[(size_t) i] = -1; }
@@ -71,6 +82,7 @@ bool ExwProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const {
 
 void ExwProcessor::prepareToPlay (double sampleRate, int block) {
     fxRack->prepare (sampleRate, block);
+    arp->prepare (sampleRate);
     engine.prepare (sampleRate);
     uiNotes.reset (sampleRate);
 }
@@ -166,10 +178,22 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         if (lastKnobParam[(size_t) i] >= 0 && pv != lastKnobParam[(size_t) i]) engine.setApKnob (i, pv / 127.0f);
         lastKnobParam[(size_t) i] = pv;
     }
-    // tempo for synced delay / flanger / phaser: the host's, else 120
-    if (auto* ph = getPlayHead()) if (auto pos = ph->getPosition()) if (auto bpm = pos->getBpm()) fxRack->setTempo (*bpm);
+    // tempo for synced delay / flanger / phaser and the arpeggiator: the host's, else 120
+    double hostBpm = 120; std::optional<double> ppq; bool playing = false;
+    if (auto* ph = getPlayHead()) if (auto pos = ph->getPosition()) {
+        if (auto bpm = pos->getBpm()) { hostBpm = *bpm; fxRack->setTempo (*bpm); }
+        if (auto q = pos->getPpqPosition()) ppq = *q;
+        playing = pos->getIsPlaying();
+    }
     juce::MidiBuffer ui; uiNotes.removeNextBlockOfMessages (ui, buffer.getNumSamples());
     for (auto meta : ui) midi.addEvent (meta.getMessage(), meta.samplePosition);
+    {
+        auto v = [&] (const char* id) { return params.getRawParameterValue (id)->load(); };
+        Arp::Params ap; ap.mode = (int) v ("arpMode"); ap.pattern = (int) v ("arpPattern"); ap.rate = (int) v ("arpRate"); ap.oct = (int) v ("arpOct");
+        ap.gate = v ("arpGate"); ap.swing = v ("arpSwing"); ap.hostSync = v ("arpSync") < .5f; ap.tempo = v ("arpTempo");
+        arp->process (midi, buffer.getNumSamples(), ap, hostBpm, ppq, playing);
+        arpHeld = arp->heldCount();
+    }
 
     auto* L = buffer.getWritePointer (0);
     auto* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;

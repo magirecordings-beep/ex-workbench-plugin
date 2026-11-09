@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "engine/Engine.h"
 namespace xfx { class FxRack; }
+class Arp;
 
 // Xtreme Lab as a plugin: an Emulator X bank player with the browser version's engine.
 class ExwProcessor : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener {
@@ -56,6 +57,7 @@ public:
     float knob (int i) const { return knobVals[(size_t) i].load(); }
     int notesPlaying() const { return notes.load(); }
     int playersPlaying() const { return players.load(); }
+    int arpKeys() const { return arpHeld.load(); }
     int bankVersion() const { return bankVer.load(); }
     int learnedVersion() const { return learnVer.load(); }
 
@@ -67,10 +69,11 @@ public:
 private:
     exw::Engine engine { settings };
     std::unique_ptr<xfx::FxRack> fxRack;
+    std::unique_ptr<Arp> arp;
     mutable juce::SpinLock bankLock;
     std::shared_ptr<const exw::Bank> bank, pendingBank;
     std::atomic<bool> bankPending { false }, loading { false };
-    std::atomic<int> pendingPreset { -1 }, bankVer { 0 }, notes { 0 }, players { 0 }, learnKnob { -1 }, learnVer { 0 };
+    std::atomic<int> arpHeld { 0 }, pendingPreset { -1 }, bankVer { 0 }, notes { 0 }, players { 0 }, learnKnob { -1 }, learnVer { 0 };
     std::atomic<float> progress { 0 };
     juce::String status;
     std::array<std::atomic<float>, 16> knobVals;
