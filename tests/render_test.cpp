@@ -22,10 +22,10 @@ int main (int argc, char** argv) {
     auto find = [&] (const char* nm) { for (size_t i = 0; i < bank->presets.size(); ++i) if (bank->presets[i].name == nm) return (int) i; return -1; };
     struct T { const char* preset; std::vector<int> notes; int vel; double secs; const char* setup; };
     std::vector<T> tests = { { "raw:Basic Saw", { 48 }, 110, 2.0, "" }, { "syn:ORiON", { 48, 55, 60, 64 }, 100, 3.0, "" }, { "bas:FATSO mono", { 36, 43 }, 110, 2.0, "" },
-                             { "raw:Basic Saw", { 48, 55, 60 }, 100, 2.0, "uni" }, { "led:Wet", { 60 }, 100, 2.0, "" } };
+                             { "led:Wet", { 60 }, 100, 2.0, "" }, { "syn:ORiON", { 48, 55, 60, 64 }, 100, 3.0, "dark" }, { "raw:Basic Saw", { 48 }, 110, 2.0, "dark" } };
     for (auto& t : tests) {
         int idx = find (t.preset); if (idx < 0) { printf ("missing %s\n", t.preset); continue; }
-        set.uniOn = std::string (t.setup) == "uni";
+        set.cutShiftOct = std::string (t.setup) == "dark" ? -4.0f : 0.0f;
         eng.setPreset (idx);
         int n = (int) (t.secs * sr); std::vector<float> L (n), R (n);
         const int blk = 256; int off = (int) (t.secs * .7 * sr);
@@ -34,10 +34,10 @@ int main (int argc, char** argv) {
             if (i <= off && i + blk > off) for (int k : t.notes) eng.noteOff (k);
             eng.render (L.data() + i, R.data() + i, std::min (blk, n - i));
         }
-        double e = 0, pk = 0; int nan = 0; for (int i = 0; i < n; ++i) { if (! std::isfinite (L[i]) || ! std::isfinite (R[i])) ++nan; e += L[i] * L[i] + R[i] * R[i]; pk = std::max (pk, (double) std::max (std::fabs (L[i]), std::fabs (R[i]))); }
+        double e = 0, pk = 0, d = 0; int nan = 0; for (int i = 0; i < n; ++i) { if (! std::isfinite (L[i]) || ! std::isfinite (R[i])) ++nan; e += L[i] * L[i] + R[i] * R[i]; if (i) d += (L[i] - L[i - 1]) * (L[i] - L[i - 1]); pk = std::max (pk, (double) std::max (std::fabs (L[i]), std::fabs (R[i]))); }
         std::string out = std::string ("/tmp/claude-0/pool/cpp_") + t.preset + t.setup + ".wav"; for (auto& c : out) if (c == ':' || c == ' ') c = '_';
         wav (out, L, R, sr);
-        printf ("%-16s %-4s rms %.4f peak %.3f nan %d notes-left %d\n", t.preset, t.setup, std::sqrt (e / (2.0 * n)), pk, nan, eng.activeNotes());
+        printf ("%-16s %-4s rms %.4f peak %.3f brightness %.3f nan %d notes-left %d\n", t.preset, t.setup, std::sqrt (e / (2.0 * n)), pk, std::sqrt (d / (e / 2 + 1e-12)), nan, eng.activeNotes());
         eng.allNotesOff(); std::vector<float> a (8192), b (8192); for (int k = 0; k < 20; ++k) eng.render (a.data(), b.data(), 8192);
     }
 }

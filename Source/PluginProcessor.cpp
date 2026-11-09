@@ -20,12 +20,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "keys", 1 }, "Keys", StringArray { "Preset", "Poly", "Mono", "Legato" }, 0));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "glideMode", 1 }, "Glide", StringArray { "Preset", "Off", "Custom" }, 0));
     f ("glideMs", "Glide time", 5, 2000, 120, 1, "ms");
-    l.add (std::make_unique<AudioParameterBool> (ParameterID { "uniOn", 1 }, "Unison", false));
-    l.add (std::make_unique<AudioParameterInt> (ParameterID { "uniVoices", 1 }, "Unison voices", 2, 8, 5));
-    f ("uniDetune", "Unison detune", 0, 100, 20, 1, "ct");
-    f ("uniSpread", "Unison spread", 0, 100, 70, 1, "%");
-    f ("uniBlend", "Unison blend", 0, 100, 70, 1, "%");
-    f ("uniDrift", "Unison drift", 0, 100, 15, 1, "%");
+    f ("cutShift", "Cutoff shift", -9, 9, 0, .01f, "oct");
+    f ("resShift", "Resonance shift", -100, 100, 0, 1, "%");
     l.add (std::make_unique<AudioParameterBool> (ParameterID { "bendOwn", 1 }, "Preset bend range", true));
     f ("bendRange", "Bend range", 0, 24, 2, 1, "st");
     l.add (std::make_unique<AudioParameterBool> (ParameterID { "colOn", 1 }, "Analog", true));
@@ -53,7 +49,7 @@ ExwProcessor::~ExwProcessor() {
 
 juce::PropertiesFile& ExwProcessor::userSettings() {
     if (! props) {
-        juce::PropertiesFile::Options o; o.applicationName = "EX Workbench"; o.filenameSuffix = ".settings"; o.osxLibrarySubFolder = "Application Support"; o.folderName = "EX Workbench";
+        juce::PropertiesFile::Options o; o.applicationName = "Xtreme Lab"; o.filenameSuffix = ".settings"; o.osxLibrarySubFolder = "Application Support"; o.folderName = "Xtreme Lab";
         props = std::make_unique<juce::PropertiesFile> (o);
     }
     return *props;
@@ -74,8 +70,8 @@ void ExwProcessor::pushSettings() {
     auto v = [&] (const char* id) { return params.getRawParameterValue (id)->load(); };
     settings.masterDb = v ("master");
     settings.keys = (int) v ("keys"); settings.glideMode = (int) v ("glideMode"); settings.glideMs = v ("glideMs");
-    settings.uniOn = v ("uniOn") > .5f; settings.uniVoices = (int) v ("uniVoices");
-    settings.uniDetune = v ("uniDetune"); settings.uniSpread = v ("uniSpread"); settings.uniBlend = v ("uniBlend"); settings.uniDrift = v ("uniDrift");
+    settings.uniOn = false;
+    settings.cutShiftOct = v ("cutShift"); settings.resShift = v ("resShift");
     settings.bendOwn = v ("bendOwn") > .5f; settings.bendRange = v ("bendRange");
     settings.colOn = v ("colOn") > .5f; settings.colMono = v ("colMono") > .5f;
     settings.colWarmth = v ("colWarmth"); settings.colWeight = v ("colWeight"); settings.colSub = v ("colSub"); settings.colSmooth = v ("colSmooth");

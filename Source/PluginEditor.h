@@ -2,7 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 
-// The plugin window: the EX Workbench faceplate (HTML, like the browser version) in a web view,
+// The plugin window: the Xtreme Lab faceplate (HTML, like the browser version) in a web view,
 // talking to the processor through JUCE's native bridge ("exw" events both ways).
 class ExwEditor : public juce::AudioProcessorEditor, private juce::Timer {
 public:

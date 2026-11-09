@@ -31,8 +31,8 @@ int main (int argc, char** argv) {
     p->setCurrentProgram (0); { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p->processBlock (x, m); }
     printf ("after setCurrentProgram(0): %d '%s'\n", p->getCurrentProgram(), p->getProgramName (p->getCurrentProgram()).toRawUTF8());
     play ("preset 1 single", { 60 });
-    proc->params.getParameter ("uniOn")->setValueNotifyingHost (1.0f);
-    play ("preset 1 unison", { 60 });
+    proc->params.getParameter ("cutShift")->setValueNotifyingHost (0.3f);
+    play ("preset 1 cutoff shifted down", { 60 });
     // program change via MIDI
     { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::programChange (1, 9), 0); p->processBlock (x, m); }
     printf ("after MIDI program change 10: %d '%s'\n", p->getCurrentProgram(), p->getProgramName (p->getCurrentProgram()).toRawUTF8());
@@ -45,13 +45,13 @@ int main (int argc, char** argv) {
     p2->setStateInformation (mb.getData(), (int) mb.getSize());
     for (int k = 0; k < 600 && (proc2->isLoading() || ! proc2->currentBank()); ++k) { juce::Thread::sleep (20); }
     for (int k = 0; k < 3; ++k) { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p2->processBlock (x, m); }
-    printf ("restored: program %d '%s' uniOn %.0f knob A %.3f (shared bank: %s)\n", p2->getCurrentProgram(), p2->getProgramName (p2->getCurrentProgram()).toRawUTF8(),
-            proc2->params.getRawParameterValue ("uniOn")->load(), proc2->knob (0), proc2->currentBank() == proc->currentBank() ? "yes" : "no");
+    printf ("restored: program %d '%s' cutShift %.2f oct knob A %.3f (shared bank: %s)\n", p2->getCurrentProgram(), p2->getProgramName (p2->getCurrentProgram()).toRawUTF8(),
+            proc2->params.getRawParameterValue ("cutShift")->load(), proc2->knob (0), proc2->currentBank() == proc->currentBank() ? "yes" : "no");
     // timing: how long 10 s of an 8-note unison chord takes to render
-    proc->params.getParameter ("uniVoices")->setValueNotifyingHost (1.0f);
+
     auto t0 = juce::Time::getMillisecondCounterHiRes(); juce::AudioBuffer<float> buf (2, 512);
     for (int k = 0; k < 940; ++k) { juce::MidiBuffer m; buf.clear(); if (k == 0) for (int n : { 36, 43, 48, 55, 60, 64, 67, 72 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); p->processBlock (buf, m); }
-    printf ("10 s of 8-note 8-voice unison chord rendered in %.0f ms (%.1f%% of real time, one core)\n", juce::Time::getMillisecondCounterHiRes() - t0, (juce::Time::getMillisecondCounterHiRes() - t0) / 100.0);
+    printf ("10 s of 8-note chord rendered in %.0f ms (%.1f%% of real time, one core)\n", juce::Time::getMillisecondCounterHiRes() - t0, (juce::Time::getMillisecondCounterHiRes() - t0) / 100.0);
     p2.reset(); p.reset();
     return 0;
 }

@@ -1,0 +1,87 @@
+# Builds Xtreme Lab on GitHub's machines every time something is pushed:
+#   macOS  (Apple Silicon + Intel): AU, VST3 and a standalone app  -> Xtreme-Lab-mac.zip
+#   Windows (64-bit):               VST3 and a standalone app      -> Xtreme-Lab-windows.zip
+# Download them from the run's "Artifacts" section (or from a Release, for tags like v0.2.0).
+name: Build Xtreme Lab
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: cmake --build build --config Release --target XtremeLab_AU XtremeLab_VST3 XtremeLab_Standalone -- -quiet
+
+      - name: Sign (ad-hoc) and package
+        run: |
+          set -e
+          A="build/XtremeLab_artefacts/Release"
+          mkdir -p dist
+          cp -R "$A/AU/Xtreme Lab.component" dist/
+          cp -R "$A/VST3/Xtreme Lab.vst3" dist/
+          cp -R "$A/Standalone/Xtreme Lab.app" dist/
+          for b in dist/*.component dist/*.vst3 dist/*.app; do codesign --force --deep --sign - "$b"; done
+          cp packaging/Install.command dist/
+          cp packaging/README-mac.txt dist/README.txt
+          chmod +x dist/Install.command
+          cd dist && ditto -c -k --keepParent . "../Xtreme-Lab-mac.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Xtreme-Lab-mac
+          path: Xtreme-Lab-mac.zip
+
+      - name: Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Xtreme-Lab-mac.zip
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # the faceplate uses Microsoft Edge WebView2; its SDK is linked in so nothing extra ships with the plugin
+      - name: Get the WebView2 SDK
+        shell: pwsh
+        run: nuget install Microsoft.Web.WebView2 -OutputDirectory "$env:GITHUB_WORKSPACE\wv2" -NonInteractive
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_WEBVIEW2_PACKAGE_LOCATION="$env:GITHUB_WORKSPACE/wv2"
+
+      - name: Build
+        run: cmake --build build --config Release --target XtremeLab_VST3 XtremeLab_Standalone -- /m /v:minimal
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $A = "build/XtremeLab_artefacts/Release"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item -Recurse "$A/VST3/Xtreme Lab.vst3" dist/
+          Copy-Item "$A/Standalone/Xtreme Lab.exe" dist/
+          Copy-Item packaging/Install.bat, packaging/Install.ps1 dist/
+          Copy-Item packaging/README-windows.txt dist/README.txt
+          Compress-Archive -Path dist/* -DestinationPath Xtreme-Lab-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Xtreme-Lab-windows
+          path: Xtreme-Lab-windows.zip
+
+      - name: Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Xtreme-Lab-windows.zip

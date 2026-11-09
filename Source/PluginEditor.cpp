@@ -9,9 +9,24 @@ juce::var obj (std::initializer_list<std::pair<const char*, juce::var>> kv) {
 }
 }
 
+namespace {
+// Windows draws the faceplate with Edge WebView2; it needs a writable folder of its own (a DAW's install folder isn't)
+juce::WebBrowserComponent::Options browserOptions() {
+    juce::WebBrowserComponent::Options o;
+   #if JUCE_WINDOWS
+    o = o.withBackend (juce::WebBrowserComponent::Options::Backend::webview2)
+         .withWinWebView2Options (juce::WebBrowserComponent::Options::WinWebView2 {}
+                                      .withUserDataFolder (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Xtreme Lab").getChildFile ("WebView2"))
+                                      .withStatusBarDisabled()
+                                      .withBackgroundColour (juce::Colour (0xff1b1d20)));
+   #endif
+    return o;
+}
+}
+
 ExwEditor::ExwEditor (ExwProcessor& p)
     : AudioProcessorEditor (p), proc (p),
-      web (juce::WebBrowserComponent::Options {}
+      web (browserOptions()
                .withNativeIntegrationEnabled()
                .withKeepPageLoadedWhenBrowserIsHidden()
                .withResourceProvider ([] (const juce::String& url) { return resource (url); })
@@ -19,8 +34,9 @@ ExwEditor::ExwEditor (ExwProcessor& p)
     addAndMakeVisible (web);
     web.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
     setResizable (true, true);
-    setResizeLimits (820, 560, 2400, 1600);
-    setSize (1120, 780);
+    setResizeLimits (800, 480, 3200, 1920);
+    getConstrainer()->setFixedAspectRatio (1600.0 / 960.0);
+    setSize (1280, 768);
     startTimerHz (20);
 }
 
@@ -106,7 +122,7 @@ void ExwEditor::handle (const juce::var& m) {
     if (type == "ready") { ready = true; sendState (true); }
     else if (type == "loadBank") {
         auto start = proc.lastBankFile.existsAsFile() ? proc.lastBankFile.getParentDirectory() : juce::File (proc.userSettings().getValue ("recentBank")).getParentDirectory();
-        chooser = std::make_unique<juce::FileChooser> ("Choose an Emulator X bank (.exb). Its SamplePool folder must be next to it.", start, "*.exb");
+        chooser = std::make_unique<juce::FileChooser> ("Choose an Emulator X bank (.exb). Its SamplePool is found next to it automatically.", start, "*.exb");
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
             auto f = fc.getResult(); if (f.existsAsFile()) proc.loadBankAsync (f, 0);
         });
@@ -121,6 +137,8 @@ void ExwEditor::handle (const juce::var& m) {
         }
     }
     else if (type == "note") proc.queueNote ((int) m["note"], (int) m["vel"]);
+    else if (type == "bend") proc.queueBend ((int) m["value"]);
+    else if (type == "cc") proc.queueCC ((int) m["cc"], (int) m["value"]);
     else if (type == "learn") proc.startLearn ((int) m["index"]);
     else if (type == "defcc") { for (int i = 0; i < 16; ++i) proc.settings.apCC[(size_t) i] = AP_DEFAULT_CC[i]; sendState (false); }
     else if (type == "fav") {

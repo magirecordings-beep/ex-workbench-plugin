@@ -2,7 +2,7 @@
 #include <JuceHeader.h>
 #include "engine/Engine.h"
 
-// EX Workbench as a plugin: an Emulator X bank player with the browser version's engine.
+// Xtreme Lab as a plugin: an Emulator X bank player with the browser version's engine.
 class ExwProcessor : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener {
 public:
     ExwProcessor();
@@ -15,7 +15,7 @@ public:
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
-    const juce::String getName() const override { return "EX Workbench"; }
+    const juce::String getName() const override { return "Xtreme Lab"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -34,6 +34,9 @@ public:
     // ---- used by the editor (message thread) ----
     void loadBankAsync (const juce::File& exb, int presetAfterLoad = 0);
     void selectPreset (int index) { pendingPreset.store (index); }
+    // on-screen pitch and mod wheels
+    void queueBend (int value14) { uiNotes.addMessageToQueue (juce::MidiMessage::pitchWheel (1, juce::jlimit (0, 16383, value14))); }
+    void queueCC (int cc, int value) { uiNotes.addMessageToQueue (juce::MidiMessage::controllerEvent (1, juce::jlimit (0, 127, cc), juce::jlimit (0, 127, value))); }
     void queueNote (int note, int velocity) { uiNotes.addMessageToQueue (velocity > 0 ? juce::MidiMessage::noteOn (1, note, (juce::uint8) velocity) : juce::MidiMessage::noteOff (1, note)); }
     void startLearn (int knob) { learnKnob.store (knob); }
     std::shared_ptr<const exw::Bank> currentBank() const { const juce::SpinLock::ScopedLockType l (bankLock); return bank; }

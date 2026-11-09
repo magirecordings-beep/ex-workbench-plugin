@@ -1,4 +1,4 @@
-// EX Workbench: E-MU Emulator X bank (.exb) and SamplePool (.ebl) reader.
+// Xtreme Lab: E-MU Emulator X bank (.exb) and SamplePool (.ebl) reader.
 // Plain C++17 (no JUCE), ported from the browser version's parser so both read banks identically.
 #pragma once
 #include <array>

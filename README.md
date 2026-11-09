@@ -1,16 +1,19 @@
-# EX Workbench plugin
+# Xtreme Lab plugin
 
 E-MU Emulator X bank player (AU / VST3 / standalone) built with JUCE 8, using the same sound engine as the
-browser version of EX Workbench: presets, zones, envelopes, filters (incl. the morph filters), modulation cords,
-LFOs, MIDI A-P knobs, mono/legato/glide, per-preset bend range, unison and the Analog output stage.
+browser version of Xtreme Lab: presets, zones, envelopes, filters (incl. the morph filters), modulation cords,
+LFOs, MIDI A-P knobs, mono/legato/glide, per-preset bend range, filter cutoff/resonance shift and the Analog output stage.
 
 ## Getting a build
-Push this repository to GitHub. The workflow in `.github/workflows/build-mac.yml` builds a universal
-(Apple Silicon + Intel) AU, VST3 and app on GitHub's Mac machines and attaches `EX-Workbench-mac.zip` to the run
-(Actions tab > latest run > Artifacts). Unzip it and run `Install.command`.
+Every push runs `.github/workflows/build.yml` on GitHub's machines:
+- macOS: universal (Apple Silicon + Intel) AU, VST3 and app -> `Xtreme-Lab-mac.zip` (run `Install.command`)
+- Windows: 64-bit VST3 and app -> `Xtreme-Lab-windows.zip` (run `Install.bat`)
+
+Download them from Actions tab > latest run > Artifacts, or from Releases for tags like `v0.2.0`.
 
 ## Building locally (optional)
-Requires Xcode and CMake: `cmake -B build -G Xcode && cmake --build build --config Release`
+Mac: Xcode and CMake: `cmake -B build -G Xcode && cmake --build build --config Release`
+Windows: Visual Studio 2022, CMake, and the `Microsoft.Web.WebView2` NuGet package (see the workflow).
 
 ## Layout
 - `Source/engine` – bank reader and sound engine (plain C++17, no JUCE; testable on its own)

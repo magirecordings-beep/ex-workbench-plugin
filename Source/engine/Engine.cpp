@@ -175,12 +175,17 @@ void Engine::computeStages (NoteVoice& nv, int code, float freq, float res100) {
 
 // Web Audio's BiquadFilterNode formulas (lowpass/highpass Q in dB), so filters match the browser version
 void Engine::setBiquad (Biquad& b, const StageSpec& s, float cents) {
-    double f = s.f * std::pow (2.0, cents / 1200.0); f = std::max (5.0, std::min (sr * .4999, f));
-    double w0 = 2 * PI * f / sr, cw = std::cos (w0), sw = std::sin (w0), A = std::pow (10.0, s.g / 40.0);
+    // a resonant peak pushed near the top of the band rings at half the sample rate (heard as crackle): above
+    // 12 kHz the resonance and any boost fade away
+    const double f0 = s.f * std::pow (2.0, cents / 1200.0), f = std::max (5.0, std::min ({ sr * .45, 20000.0, f0 }));
+    const double top = std::max (0.0, std::min (1.0, (std::min (f0, 22000.0) - 12000.0) / 8000.0));
+    const float q = (s.t == ST_LP || s.t == ST_HP) ? (float) (s.q + (std::min (s.q, -3.0f) - s.q) * top) : s.q;
+    const float gq = (s.t == ST_PK || s.t == ST_LS || s.t == ST_HS) ? (float) (s.g * (1 - top)) : s.g;
+    double w0 = 2 * PI * f / sr, cw = std::cos (w0), sw = std::sin (w0), A = std::pow (10.0, gq / 40.0);
     double b0 = 1, b1 = 0, b2 = 0, a0 = 1, a1 = 0, a2 = 0;
     switch (s.t) {
-        case ST_LP: { double al = sw / (2 * std::pow (10.0, s.q / 20.0)); b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = b0; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break; }
-        case ST_HP: { double al = sw / (2 * std::pow (10.0, s.q / 20.0)); b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = b0; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break; }
+        case ST_LP: { double al = sw / (2 * std::pow (10.0, q / 20.0)); b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = b0; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break; }
+        case ST_HP: { double al = sw / (2 * std::pow (10.0, q / 20.0)); b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = b0; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break; }
         case ST_BP: { double al = sw / (2 * std::max (1e-4f, s.q)); b0 = al; b1 = 0; b2 = -al; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break; }
         case ST_NO: { double al = sw / (2 * std::max (1e-4f, s.q)); b0 = 1; b1 = -2 * cw; b2 = 1; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break; }
         case ST_AP: { double al = sw / (2 * std::max (1e-4f, s.q)); b0 = 1 - al; b1 = -2 * cw; b2 = 1 + al; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break; }
@@ -242,11 +247,13 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     if (v.hasFilter) {
         float res = std::round (v.fq * 100);
         int morph; if (emuFilterType (v.ftype, morph) != F_BYPASS && fixed[3] != 0) res = std::max (0.0f, std::min (100.0f, res + fixed[3]));
+        { int mo; if (emuFilterType (v.ftype, mo) != F_BYPASS) res = std::max (0.0f, std::min (100.0f, res + set.resShift.load())); }
         computeStages (nv, v.ftype, std::round (v.ffreq * 100), res);
     }
     nv.filtMod = false; for (auto& r : nv.routes) if (r.dst == DST_FILT) nv.filtMod = true;
-    for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], nv.fixedFilt);
-    nv.lastFiltCents = nv.fixedFilt;
+    nv.shiftNow = set.cutShiftOct.load() * 1200.0f;
+    for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], nv.fixedFilt + nv.shiftNow);
+    nv.lastFiltCents = nv.fixedFilt + nv.shiftNow;
     nv.panNow = std::max (-1.0f, std::min (1.0f, nv.basePan + nv.cordPan));
     // bend
     nv.ownBend = set.bendOwn.load() && v.bendUp >= 0;
@@ -256,7 +263,7 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     nv.glideFrom = gt > 0 ? (glideFrom - note) * 100.0 : 0; nv.glideTo = 0; nv.glideT = 0; nv.glideDur = gt;
     (void) solo;
     // unison copies
-    int n = set.uniOn.load() ? std::max (2, std::min (8, set.uniVoices.load())) : 1;
+    int n = 1; // unison isn't part of Xtreme Lab
     nv.copies.assign ((size_t) n, Copy());
     if (n > 1) {
         float det = set.uniDetune.load(), spread = set.uniSpread.load() / 100.0f, ow = set.uniBlend.load() / 100.0f;
@@ -457,7 +464,12 @@ void Engine::render (float* L, float* R, int n) {
             if (nv.glideDur > 0 && nv.glideT < nv.glideDur) { pitch += (float) (nv.glideFrom + (nv.glideTo - nv.glideFrom) * nv.glideT / nv.glideDur); nv.glideT += subDur; }
             else pitch += (float) nv.glideTo;
             pan = std::max (-1.0f, std::min (1.0f, pan));
-            if (nv.filtMod && std::fabs (filt - nv.lastFiltCents) > .5f) { for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], filt); nv.lastFiltCents = filt; }
+            { const float want = set.cutShiftOct.load() * 1200.0f; nv.shiftNow += (want - nv.shiftNow) * std::min (1.0f, (float) (subDur / .02)); }
+            filt += nv.shiftNow;
+            // the cutoff target for the end of this little block; fast sweeps are followed sample by sample
+            const float filtFrom = nv.lastFiltCents;
+            const bool filtFast = nv.nStages && std::fabs (filt - filtFrom) > 3.0f;
+            if (! filtFast && nv.nStages && std::fabs (filt - nv.lastFiltCents) > .25f) { for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], filt); nv.lastFiltCents = filt; }
             // per-copy increments
             const Sample& s = *nv.s; const int nc = (int) nv.copies.size();
             double inc[8];
@@ -498,10 +510,12 @@ void Engine::render (float* L, float* R, int n) {
                 if (! alive && ! nv.releasing) { nv.releasing = true; nv.envRel = true; nv.relFrom = 0; }
                 // filter
                 double xl = ml, xr = mr;
+                if (filtFast) { const float c = filtFrom + (filt - filtFrom) * (float) (i + 1) / (float) m; for (int sIdx = 0; sIdx < nv.nStages; ++sIdx) setBiquad (nv.bq[sIdx], nv.stages[sIdx], c); if (i == m - 1) nv.lastFiltCents = filt; }
+                // direct form I: its memory is real past samples, so cutoff jumps stay smooth
                 for (int sIdx = 0; sIdx < nv.nStages; ++sIdx) {
                     auto& q = nv.bq[sIdx];
-                    double yl = q.b0 * xl + q.z1[0]; q.z1[0] = q.b1 * xl - q.a1 * yl + q.z2[0]; q.z2[0] = q.b2 * xl - q.a2 * yl; xl = yl;
-                    if (nv.stereoPath) { double yr = q.b0 * xr + q.z1[1]; q.z1[1] = q.b1 * xr - q.a1 * yr + q.z2[1]; q.z2[1] = q.b2 * xr - q.a2 * yr; xr = yr; }
+                    double yl = q.b0 * xl + q.b1 * q.x1[0] + q.b2 * q.x2[0] - q.a1 * q.y1[0] - q.a2 * q.y2[0]; q.x2[0] = q.x1[0]; q.x1[0] = xl; q.y2[0] = q.y1[0]; q.y1[0] = yl; xl = yl;
+                    if (nv.stereoPath) { double yr = q.b0 * xr + q.b1 * q.x1[1] + q.b2 * q.x2[1] - q.a1 * q.y1[1] - q.a2 * q.y2[1]; q.x2[1] = q.x1[1]; q.x1[1] = xr; q.y2[1] = q.y1[1]; q.y1[1] = yr; xr = yr; }
                 }
                 // envelope, level, cord volume
                 float g = envLevel (nv) * nv.baseGain * vol;

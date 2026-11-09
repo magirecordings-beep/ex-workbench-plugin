@@ -1,4 +1,4 @@
-// EX Workbench sound engine: plays Emulator X presets the way the browser version does.
+// Xtreme Lab sound engine: plays Emulator X presets the way the browser version does.
 // Plain C++17, no JUCE, so it can be tested on its own. Not thread-safe by itself: the plugin calls
 // everything that changes state from the audio thread (MIDI) or hands settings over via atomics.
 #pragma once
@@ -28,6 +28,8 @@ struct Settings {
     // Analog colour on the output
     std::atomic<bool> colOn { true }, colMono { true };
     std::atomic<float> colWarmth { 35 }, colWeight { 40 }, colSub { 25 }, colSmooth { 20 };
+    // Filter panel on presets: shift every voice's filter (octaves, resonance %)
+    std::atomic<float> cutShiftOct { 0 }, resShift { 0 };
     Settings();
 };
 
@@ -59,7 +61,7 @@ public:
     static int apSrc (int i);                           // cord source number of MIDI A-P
 
 private:
-    struct Biquad { double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0; double z1[2] {}, z2[2] {}; };
+    struct Biquad { double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0; double x1[2] {}, x2[2] {}, y1[2] {}, y2[2] {}; }; // direct form I
     struct StageSpec { int t; float f, g, q; };
     struct Route { int kind; int which; int ctrl; int dst; float gain; std::vector<std::pair<int, float>> att; };
     struct ModEnv { float pts[6][2]; int n = 0; double t = 0; float v = 0; bool rel = false; float relFrom = 0, r1 = 0, r2 = 0, l4 = 0, l5 = 0; double relT = 0; };
@@ -79,7 +81,7 @@ private:
         float bendCents = 0; bool ownBend = false;
         double glideFrom = 0, glideTo = 0, glideT = 0, glideDur = 0;  // cents offset ramp
         // filter
-        int nStages = 0; StageSpec stages[6] {}; Biquad bq[6]; bool filtMod = false; float lastFiltCents = 1e9f;
+        int nStages = 0; StageSpec stages[6] {}; Biquad bq[6]; bool filtMod = false; float lastFiltCents = 1e9f; float shiftNow = 0;
         // unison copies (1 = plain)
         std::vector<Copy> copies; bool stereoPath = false;
         float panNow = 0;

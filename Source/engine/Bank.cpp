@@ -243,8 +243,22 @@ std::shared_ptr<Bank> loadBank (const std::string& exbPath, const std::function<
     for (auto& p : bank->presets) for (auto& v : p.voices) for (auto& z : v.zones) wanted.insert (z.sample);
 
     // SamplePool folder next to the bank (or the bank's own folder)
+    // "<bank> SamplePool" first, then "SamplePool" (any spelling), then .ebl files lying next to the bank
     auto dir = fs::u8path (exbPath).parent_path();
-    std::vector<fs::path> pools { dir / "SamplePool", dir };
+    std::vector<fs::path> pools;
+    {
+        std::string stem = fs::u8path (exbPath).stem().u8string(); for (auto& ch : stem) ch = (char) std::tolower ((unsigned char) ch);
+        std::vector<fs::path> mine, other; std::error_code ec;
+        for (auto& e : fs::directory_iterator (dir, ec)) {
+            if (! e.is_directory (ec)) continue;
+            std::string fn = e.path().filename().u8string(), low = fn; for (auto& ch : low) ch = (char) std::tolower ((unsigned char) ch);
+            std::string squash; for (char ch : low) if (ch != ' ' && ch != '_' && ch != '-') squash += ch;
+            if (squash.find ("samplepool") == std::string::npos) continue;
+            (low.rfind (stem, 0) == 0 ? mine : other).push_back (e.path());
+        }
+        pools.insert (pools.end(), mine.begin(), mine.end()); pools.insert (pools.end(), other.begin(), other.end());
+        pools.push_back (dir);
+    }
     std::map<int, fs::path> byIndex; std::map<std::string, fs::path> byStem;
     static const std::regex slRe (R"(SL(\d+)\.ebl$)", std::regex::icase);
     for (auto& pd : pools) {
