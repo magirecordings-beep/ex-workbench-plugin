@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Fx.h"
 
 namespace {
 const char* AP_LETTERS = "ABCDEFGHIJKLMNOP";
@@ -30,6 +31,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
     f ("colWeight", "Weight", 0, 100, 40, 1, "%");
     f ("colSub", "Sub", 0, 100, 25, 1, "%");
     f ("colSmooth", "Smooth", 0, 100, 20, 1, "%");
+    // effects (FX A reverb, FX B, sends, master EQ)
+    for (auto& d : xfx::paramDefs()) {
+        if (d.choices && juce::String (d.choices) == "bool") l.add (std::make_unique<AudioParameterBool> (ParameterID { d.id, 1 }, d.name, d.def > .5f));
+        else if (d.choices) l.add (std::make_unique<AudioParameterChoice> (ParameterID { d.id, 1 }, d.name, StringArray::fromTokens (d.choices, ",", ""), (int) d.def));
+        else { NormalisableRange<float> r (d.lo, d.hi, d.step); if (d.skewCentre > 0) r.setSkewForCentre (d.skewCentre);
+               l.add (std::make_unique<AudioParameterFloat> (ParameterID { d.id, 1 }, d.name, r, d.def, AudioParameterFloatAttributes().withLabel (d.unit))); }
+    }
     for (int i = 0; i < 16; ++i)
         l.add (std::make_unique<AudioParameterFloat> (ParameterID { knobId (i), 1 }, juce::String ("Knob ") + AP_LETTERS[i], NormalisableRange<float> (0, 127, 1), 0));
     return l;
@@ -38,6 +46,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
 ExwProcessor::ExwProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       params (*this, nullptr, "EXW", layout()) {
+    fxRack = std::make_unique<xfx::FxRack> (params);
+    engine.setFxHook (fxRack.get());
     for (auto* p : getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p)) params.addParameterListener (r->getParameterID(), this);
     for (int i = 0; i < 16; ++i) { knobVals[(size_t) i] = 0; lastKnobParam[(size_t) i] = -1; restoreKnobs[(size_t) i] = -1; }
     pushSettings();
@@ -59,7 +69,8 @@ bool ExwProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const {
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() || layouts.getMainOutputChannelSet() == juce::AudioChannelSet::mono();
 }
 
-void ExwProcessor::prepareToPlay (double sampleRate, int) {
+void ExwProcessor::prepareToPlay (double sampleRate, int block) {
+    fxRack->prepare (sampleRate, block);
     engine.prepare (sampleRate);
     uiNotes.reset (sampleRate);
 }
@@ -155,6 +166,8 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         if (lastKnobParam[(size_t) i] >= 0 && pv != lastKnobParam[(size_t) i]) engine.setApKnob (i, pv / 127.0f);
         lastKnobParam[(size_t) i] = pv;
     }
+    // tempo for synced delay / flanger / phaser: the host's, else 120
+    if (auto* ph = getPlayHead()) if (auto pos = ph->getPosition()) if (auto bpm = pos->getBpm()) fxRack->setTempo (*bpm);
     juce::MidiBuffer ui; uiNotes.removeNextBlockOfMessages (ui, buffer.getNumSamples());
     for (auto meta : ui) midi.addEvent (meta.getMessage(), meta.samplePosition);
 
@@ -236,6 +249,7 @@ exw::Patch ExwProcessor::resolvePatch (const juce::var& p) const {
         L.coarse = (int) num (l["coarse"], 0); L.fine = (float) num (l["fine"], 0);
         L.keyLo = (int) num (l["key"]["lo"], 0); L.keyHi = (int) num (l["key"]["hi"], 127);
         L.velLo = (int) num (l["vel"]["lo"], 1); L.velHi = (int) num (l["vel"]["hi"], 127);
+        L.sendA = (float) num (l["sendA"], -1); L.sendB = (float) num (l["sendB"], -1);
     }
     return out;
 }

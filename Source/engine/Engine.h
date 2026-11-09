@@ -34,6 +34,15 @@ struct Settings {
     Settings();
 };
 
+// the effects live outside the engine (the plugin supplies them): the engine fills two send buses per block,
+// FX returns are mixed in before the voice bus level, then post() runs on the scaled mix (insert FX, EQ)
+struct FxHook {
+    virtual ~FxHook() = default;
+    virtual void sends (float* L, float* R, const float* aL, const float* aR, const float* bL, const float* bR, int n) = 0;
+    virtual void post (float* L, float* R, int n) = 0;
+    virtual float sendLevel (int bus) const = 0;   // 0/1: global send A/B (0..1); 2: 1 while FX B takes sends
+};
+
 // a user patch: up to four layers, each one of the bank's presets with its own level, pan, tuning and ranges
 struct Layer {
     int preset = -1;                       // index into the bank's presets (-1 = empty)
@@ -41,6 +50,7 @@ struct Layer {
     float volDb = 0, pan = 0;              // pan -100..100
     int coarse = 0; float fine = 0;        // semitones, cents
     int keyLo = 0, keyHi = 127, velLo = 1, velHi = 127;
+    float sendA = -1, sendB = -1;          // % to the effects; -1 = use the global sends
 };
 struct Patch {
     bool active = false;                   // false: play the selected preset on its own
@@ -71,6 +81,7 @@ public:
     float apKnob (int i) const { return ctrlVal[apSrc (i)]; }
 
     void render (float* L, float* R, int n);           // adds nothing: overwrites L/R
+    void setFxHook (FxHook* h) { fx = h; }
     int activeNotes() const;
     int activePlayers() const;
     std::atomic<int> apChanged { 0 };                   // bit per knob moved by MIDI (UI reads and clears)
@@ -103,7 +114,7 @@ private:
         std::vector<Copy> copies; bool stereoPath = false;
         float panNow = 0;
         int kb = 0; int monoGroup = -1;
-        int layer = -1; float lyG = 1;   // patch layer (-1 none) and its level, following the layer's volume live
+        int layer = -1; float lyG = 1; float sa = 0, sb = 0;   // patch layer (-1 none) and its level, following the layer's volume live
     };
     struct MonoGroup { const Voice* vd = nullptr; std::vector<std::pair<int, int>> held; int cur = -1; int m = 0; };
 
@@ -122,6 +133,9 @@ private:
     float drift[8] {}, driftFrom[8] {}, driftTo[8] {}; double driftPh[8] {};
     float masterGain = .24f;
     Patch patch;
+    FxHook* fx = nullptr;
+    std::vector<float> busA[2], busB[2];
+    void renderChunk (float* L, float* R, int n);
     // the layer a note is being started for (set around startNote)
     const Preset* playing = nullptr; float lyGain = 1, lyPan = 0, lyCents = 0; int lyIdx = -1;
     float layerLevel (int i) const;

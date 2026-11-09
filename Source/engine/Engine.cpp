@@ -457,7 +457,15 @@ int Engine::activePlayers() const { int n = 0; for (auto& v : voices) if (v.acti
 
 // ---------- audio ----------
 void Engine::render (float* L, float* R, int n) {
+    for (int off = 0; off < n; off += 1024) renderChunk (L + off, R + off, std::min (1024, n - off));
+}
+
+void Engine::renderChunk (float* L, float* R, int n) {
     std::fill (L, L + n, 0.0f); std::fill (R, R + n, 0.0f);
+    for (auto* b : { &busA[0], &busA[1], &busB[0], &busB[1] }) { if ((int) b->size() < n) b->resize (1024); std::fill (b->begin(), b->begin() + n, 0.0f); }
+    float* aL = busA[0].data(); float* aR = busA[1].data(); float* bL = busB[0].data(); float* bR = busB[1].data();
+    const float gA = fx ? fx->sendLevel (0) : 0.0f, gB = fx ? fx->sendLevel (1) : 0.0f;
+    const bool bOpen = fx && fx->sendLevel (2) > 0;   // FX B takes sends (it isn't an insert)
     const double dt = 1.0 / sr;
     const float driftAmt = set.uniDrift.load() / 100.0f * 12.0f;
     for (int base = 0; base < n; base += SUB) {
@@ -515,6 +523,9 @@ void Engine::render (float* L, float* R, int n) {
             double inc[8];
             for (int k = 0; k < nc; ++k) { float c = pitch + nv.copies[(size_t) k].det + (nv.copies[(size_t) k].drift >= 0 ? drift[nv.copies[(size_t) k].drift] * driftAmt : 0.0f); inc[k] = nv.baseRate * std::pow (2.0, c / 1200.0); }
             if (nv.layer >= 0) nv.lyG += (layerLevel (nv.layer) - nv.lyG) * .35f;
+            { float ta = gA, tb = gB;
+              if (nv.layer >= 0 && patch.active) { const auto& ly = patch.layers[nv.layer]; if (ly.sendA >= 0) ta = ly.sendA / 100.0f; if (ly.sendB >= 0) tb = bOpen ? ly.sendB / 100.0f : 0.0f; }
+              nv.sa += (ta - nv.sa) * .35f; nv.sb += (tb - nv.sb) * .35f; }
             const float panFrom = nv.panNow; nv.panNow = pan;
             const bool loop = s.loop && s.loopEnd > s.loopStart; const double loopLen = loop ? (s.loopEnd + 1 - s.loopStart) : 0, loopEndP = s.loopEnd + 1;
             const bool st = s.channels == 2 && ! s.R.empty();
@@ -568,13 +579,17 @@ void Engine::render (float* L, float* R, int n) {
                 else if (p <= 0) { float x = (p + 1) * (float) PI / 2; ol = (float) (xl + xr * std::cos (x)); orr = (float) xr * std::sin (x); }
                 else { float x = p * (float) PI / 2; ol = (float) xl * std::cos (x); orr = (float) (xr + xl * std::sin (x)); }
                 L[base + i] += ol * g; R[base + i] += orr * g;
+                if (nv.sa > 1e-5f) { aL[base + i] += ol * g * nv.sa; aR[base + i] += orr * g * nv.sa; }
+                if (nv.sb > 1e-5f) { bL[base + i] += ol * g * nv.sb; bR[base + i] += orr * g * nv.sb; }
                 if (nv.ended) break;
             }
             if (nv.ended) nv.active = false;
         }
     }
     // output: the browser version's voice bus level -> Analog colour -> bus compressor -> master knob -> soft ceiling
+    if (fx) fx->sends (L, R, aL, aR, bL, bR, n);   // reverb and FX B returns join the voice bus
     for (int i = 0; i < n; ++i) { L[i] *= masterGain; R[i] *= masterGain; }
+    if (fx) fx->post (L, R, n);                     // FX B as an insert, then the master EQ
     MasterFx::Params mp; mp.on = set.colOn.load(); mp.mono = set.colMono.load(); mp.warmth = set.colWarmth.load(); mp.weight = set.colWeight.load(); mp.sub = set.colSub.load(); mp.smooth = set.colSmooth.load();
     master.setParams (mp); master.process (L, R, n);
     float mg = std::pow (10.0f, set.masterDb.load() / 20.0f);

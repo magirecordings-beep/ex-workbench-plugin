@@ -151,6 +151,22 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
 .combo-list button:hover,.combo-list button.hi{background:#163a7c;color:#fff}
 .toast{position:absolute;left:50%;bottom:170px;transform:translateX(-50%);background:#1b1c1f;border:1px solid #55585e;border-radius:6px;padding:8px 14px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
 .toast.show{opacity:1}
+
+/* effects page */
+.fxpage{grid-template-columns:1.25fr .55fr 1fr;grid-template-rows:auto auto;align-content:start}
+.fxpage > .wide{grid-column:1/-1}
+.card .ph select{background:linear-gradient(180deg,#0e2250,#081739);color:#79bbff;border:1px solid #2f4c86;border-radius:4px;padding:3px 6px}
+.fxsec{display:grid;gap:8px}
+.fxsec[hidden]{display:none}
+.btnrow{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.dlgrid{display:grid;grid-template-columns:repeat(11,minmax(0,1fr));gap:6px}
+.dsec{grid-column:span 2;display:grid;align-content:start;gap:4px;background:#121316;border:1px solid #3d4046;border-radius:4px;padding:4px 6px 6px;min-width:0}
+.dsec.n{grid-column:span 1}.dsec.w{grid-column:span 3}
+.dsec h3{margin:0;text-align:center;font:700 10px var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:#e9ebee}
+.dsec .kgrid{grid-template-columns:repeat(auto-fit,minmax(58px,1fr));gap:6px 2px}
+.psel{width:100%;background:linear-gradient(180deg,#0e2250,#081739);color:#79bbff;border:1px solid #2f4c86;border-radius:4px;padding:4px 6px}
+.cap{font:500 11px var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.mini{display:grid;gap:4px;justify-items:stretch}
 </style>
 </head>
 <body>
@@ -181,15 +197,41 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
           <div class="kcell" id="k-master"></div>
         </div>
       </div>
-      <div class="pages" role="tablist"><button type="button" class="ptab" role="tab" data-page="patch">Patch<small>layers · sources</small></button><button type="button" class="ptab" role="tab" data-page="voice">Voice<small>filter · performance · analog · controllers</small></button></div>
+      <div class="pages" role="tablist"><button type="button" class="ptab" role="tab" data-page="patch">Patch<small>layers · sources</small></button><button type="button" class="ptab" role="tab" data-page="voice">Voice<small>filter · performance · analog · controllers</small></button><button type="button" class="ptab" role="tab" data-page="fx">Effects<small>reverb · delay · chorus · drive · EQ</small></button></div>
       <div class="page" data-pg="patch" hidden>
         <section class="card"><div class="ph"><span class="led"></span><h2>Patch</h2><input class="pt-name" id="pt-name" aria-label="Patch name" maxlength="40"><span class="pt-state" id="pt-state"></span><span class="grow"></span>
             <button type="button" class="primary" id="pt-save">Save patch</button><button type="button" id="pt-new">New from preset</button><button type="button" id="pt-del">Delete</button><button type="button" id="pt-leave">Back to presets</button></div>
           <div class="pb">
             <div class="layers" id="layers"></div>
             <div class="srcrow"><span>Layer source</span><div class="combo"><input id="ly-search" placeholder="Search presets…" autocomplete="off" aria-label="Layer preset"><div class="combo-list" id="ly-list" hidden></div></div></div>
-            <div class="kgrid c8" id="ly-knobs"></div>
+            <div class="kgrid" id="ly-knobs" style="grid-template-columns:repeat(10,minmax(0,1fr))"></div>
             <p class="note">Each layer plays one of the bank's presets. Volume and pan follow live; key and velocity ranges split or stack the layers. Patches are kept in Xtreme Lab's settings and with your project.</p>
+          </div></section>
+      </div>
+      <div class="page fxpage" data-pg="fx" hidden>
+        <section class="card"><div class="ph"><span class="led"></span><h2>FX A</h2><span class="sub">reverb</span><span class="grow"></span><div class="seg" data-param="fxaType" data-opts="Classic,Room,Hall,Plate,Ambience" style="min-width:320px"></div><button type="button" class="lbtn" data-toggle="fxaOn">ON</button></div>
+          <div class="pb"><div class="kgrid" id="fxa-knobs"></div></div></section>
+        <section class="card"><div class="ph"><span class="led"></span><h2>Sends</h2></div>
+          <div class="pb"><div class="kgrid" id="send-knobs"></div><p class="note">How much of every preset goes to FX A and FX B. Patch layers have their own sends.</p></div></section>
+        <section class="card"><div class="ph"><span class="led"></span><h2>Master EQ</h2></div>
+          <div class="pb"><div class="kgrid" id="eq-knobs"></div></div></section>
+        <section class="card wide"><div class="ph"><span class="led"></span><h2>FX B</h2><span class="grow"></span><div class="seg" data-param="fxbType" data-opts="Chorus,Flanger,Phaser,Stereo delay,Drive" style="min-width:420px"></div><button type="button" class="lbtn" data-toggle="fxbIns" title="Insert: everything you hear goes through FX B. Off: FX B is fed by Send B.">INSERT</button><button type="button" class="lbtn" data-toggle="fxbOn">ON</button></div>
+          <div class="pb">
+            <div class="fxsec" data-fxb="0"><div class="kgrid" id="ch-knobs"></div></div>
+            <div class="fxsec" data-fxb="1" hidden><div class="btnrow"><button type="button" class="lbtn" data-toggle="flSync" title="Sweep in beats of the host tempo">SYNC</button><span class="cap" data-show="flSync">Sweep</span><div class="seg" data-param="flBeats" data-show="flSync" data-opts="1/2 beat,1 beat,2 beats,1 bar,2 bars,4 bars,8 bars,16 bars" style="flex:1"></div></div><div class="kgrid" id="fl-knobs"></div></div>
+            <div class="fxsec" data-fxb="2" hidden><div class="btnrow"><span class="cap">Stages</span><div class="seg" data-param="phStages" data-opts="4,6,8,12,16,24" style="min-width:220px"></div><span class="cap">Shape</span><div class="seg" data-param="phShape" data-opts="Sine,Tri,Square,Saw,Env" style="min-width:260px"></div><button type="button" class="lbtn" data-toggle="phSync">SYNC</button><button type="button" class="lbtn" data-toggle="phAnalog" title="Valve-style saturation and slow drift">ANALOG</button></div>
+              <div class="btnrow" data-show="phSync"><span class="cap">Beat</span><div class="seg" data-param="phBeats" data-opts="1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars" style="flex:1"></div></div><div class="kgrid" id="ph-knobs"></div></div>
+            <div class="fxsec" data-fxb="3" hidden>
+              <div class="btnrow"><button type="button" class="lbtn" data-toggle="dlSync" title="Times in 16th notes of the host tempo">SYNC</button><button type="button" class="lbtn" data-toggle="dlLink" title="Right side follows the left">LINK</button><button type="button" class="lbtn" data-toggle="dlPP">PING PONG</button><button type="button" class="lbtn" data-toggle="dlFreeze" title="Stop taking input and loop the echoes">FREEZE</button><button type="button" class="lbtn" data-toggle="dlFilt">FILTER</button><span class="grow" style="flex:1"></span><span class="cap">Time change</span><div class="seg" data-param="dlMode" data-opts="Repitch,Fade,Jump" style="min-width:230px"></div></div>
+              <div class="dlgrid">
+                <div class="dsec"><h3>Left</h3><div class="mini" data-show="dlSync"><select class="psel" data-psel="dlDivL"><option value="0">1/16</option><option value="1">1/8</option><option value="2">3/16 (dotted 1/8)</option><option value="3">1/4</option><option value="4">5/16</option><option value="5">3/8 (dotted 1/4)</option><option value="6">1/2</option><option value="7">1 bar</option></select></div><div class="kgrid" id="dl-left"></div></div>
+                <div class="dsec"><h3>Right</h3><div class="mini" data-show="dlSync" data-hide="dlLink"><select class="psel" data-psel="dlDivR"><option value="0">1/16</option><option value="1">1/8</option><option value="2">3/16 (dotted 1/8)</option><option value="3">1/4</option><option value="4">5/16</option><option value="5">3/8 (dotted 1/4)</option><option value="6">1/2</option><option value="7">1 bar</option></select></div><div class="kgrid" id="dl-right" data-hide="dlLink"></div><p class="note" data-show="dlLink" style="text-align:center">Linked to Left</p></div>
+                <div class="dsec n"><h3>Feedback</h3><div class="kgrid" id="dl-fb"></div></div>
+                <div class="dsec"><h3>Filter</h3><div class="kgrid" id="dl-filt"></div></div>
+                <div class="dsec w"><h3>Modulation</h3><div class="kgrid" id="dl-mod"></div></div>
+                <div class="dsec n"><h3>Mix</h3><div class="kgrid" id="dl-mix"></div></div>
+              </div></div>
+            <div class="fxsec" data-fxb="4" hidden><div class="btnrow"><span class="cap">Style</span><div class="seg" data-param="drStyle" data-opts="A · tape,E · console,N · transformer,T · triode,P · pentode" style="min-width:460px"></div><button type="button" class="lbtn" data-toggle="drPunish" title="+20 dB more drive">PUNISH</button><button type="button" class="lbtn" data-toggle="drAuto" title="Keep the level steady as Drive changes">AUTO</button><button type="button" class="lbtn" data-toggle="drThump" title="Resonant bump at the low cut">THUMP</button><button type="button" class="lbtn" data-toggle="drSteep" title="Steeper high cut">STEEP</button></div><div class="kgrid" id="dr-knobs"></div></div>
           </div></section>
       </div>
       <div class="page voicepage" data-pg="voice">
@@ -236,19 +278,21 @@ function knob(host, o) { // o: {label, min, max, step, value, def, fmt, onChange
   host.innerHTML = `<span class="kl">${esc(o.label)}</span>${o.extra || ''}<div class="kn${o.big ? ' big' : ''}" tabindex="0" role="slider" aria-label="${esc(o.label)}"><svg viewBox="0 0 50 50"><path class="kr" d="${arc(A0, A1)}"/><path class="ka"/><circle class="kb" cx="25" cy="25" r="15"/><line class="kp" x1="25" y1="25" x2="25" y2="13"/></svg></div><output></output>`;
   const kn = host.querySelector('.kn'), ka = kn.querySelector('.ka'), kp = kn.querySelector('.kp'), out = host.querySelector('output');
   let v = o.value;
+  const toU = x => o.log ? Math.log(Math.max(o.min, x) / o.min) / Math.log(o.max / o.min) : (x - o.min) / (o.max - o.min);
+  const fromU = u => o.log ? o.min * Math.pow(o.max / o.min, Math.max(0, Math.min(1, u))) : o.min + u * (o.max - o.min);
   const draw = () => {
-    const f = (v - o.min) / (o.max - o.min), a = A0 + Math.max(0, Math.min(1, f)) * (A1 - A0), z = o.min < 0 && o.max > 0 ? A0 + (-o.min / (o.max - o.min)) * (A1 - A0) : A0;
+    const f = toU(v), a = A0 + Math.max(0, Math.min(1, f)) * (A1 - A0), z = o.min < 0 && o.max > 0 ? A0 + (-o.min / (o.max - o.min)) * (A1 - A0) : A0;
     ka.setAttribute('d', a >= z ? arc(z, a) : arc(a, z)); const [x, y] = pt(a, 11); kp.setAttribute('x2', x.toFixed(2)); kp.setAttribute('y2', y.toFixed(2));
     out.textContent = o.fmt ? o.fmt(v) : String(Math.round(v)); kn.setAttribute('aria-valuenow', String(v)); kn.setAttribute('aria-valuetext', out.textContent);
   };
   const set = (nv, user) => { nv = Math.max(o.min, Math.min(o.max, Math.round(nv / o.step) * o.step)); if (nv === v) return; v = nv; draw(); if (user) o.onChange(v); };
   let drag = null;
-  kn.addEventListener('pointerdown', e => { e.preventDefault(); kn.focus(); kn.setPointerCapture(e.pointerId); drag = { y: e.clientY, x: e.clientX, v }; });
-  kn.addEventListener('pointermove', e => { if (!drag) return; const d = (drag.y - e.clientY) + (e.clientX - drag.x) * .5; set(drag.v + d / 180 * (o.max - o.min) * (e.shiftKey ? .15 : 1), true); });
+  kn.addEventListener('pointerdown', e => { e.preventDefault(); kn.focus(); kn.setPointerCapture(e.pointerId); drag = { y: e.clientY, x: e.clientX, u: toU(v) }; });
+  kn.addEventListener('pointermove', e => { if (!drag) return; const d = (drag.y - e.clientY) + (e.clientX - drag.x) * .5; set(fromU(drag.u + d / 180 * (e.shiftKey ? .15 : 1)), true); });
   const end = () => { drag = null; }; kn.addEventListener('pointerup', end); kn.addEventListener('pointercancel', end);
-  kn.addEventListener('wheel', e => { e.preventDefault(); set(v - Math.sign(e.deltaY) * Math.max(o.step, (o.max - o.min) / (e.shiftKey ? 400 : 100)), true); }, { passive: false });
+  kn.addEventListener('wheel', e => { e.preventDefault(); set(fromU(toU(v) - Math.sign(e.deltaY) / (e.shiftKey ? 400 : 100)), true); }, { passive: false });
   kn.addEventListener('dblclick', () => set(o.def ?? (o.min < 0 && o.max > 0 ? 0 : o.min), true));
-  kn.addEventListener('keydown', e => { const d = Math.max(o.step, (o.max - o.min) / 100), m = { ArrowUp: d, ArrowRight: d, ArrowDown: -d, ArrowLeft: -d, PageUp: 10 * d, PageDown: -10 * d }[e.key]; if (m !== undefined) { e.preventDefault(); set(v + m, true); } });
+  kn.addEventListener('keydown', e => { const m = { ArrowUp: .01, ArrowRight: .01, ArrowDown: -.01, ArrowLeft: -.01, PageUp: .1, PageDown: -.1 }[e.key]; if (m !== undefined) { e.preventDefault(); const nv = fromU(toU(v) + m); set(Math.abs(nv - v) < o.step ? v + Math.sign(m) * o.step : nv, true); } });
   draw();
   return { set: x => { if (!drag) { v = x; draw(); } }, el: host, kn };
 }
@@ -285,7 +329,7 @@ function renderParams() {
   for (const [id, k] of Object.entries(PK)) if (st.params[id] !== undefined) k.set(st.params[id]);
   document.querySelectorAll('.seg[data-param]').forEach(sg => { const v = Math.round(st.params[sg.dataset.param] ?? -1); sg.querySelectorAll('[data-v]').forEach(b => b.setAttribute('aria-checked', String(+b.dataset.v === v))); });
   document.querySelectorAll('[data-toggle]').forEach(b => b.classList.toggle('on', st.params[b.dataset.toggle] > .5));
-  renderDim();
+  renderDim(); renderFx();
 }
 
 /* ---------- controllers (MIDI A-P) ---------- */
@@ -373,6 +417,47 @@ function renderLcd() {
 })();
 
 
+
+/* ---------- effects ---------- */
+const pc = v => Math.round(v) + '%', hz = v => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 1 : 2) + ' k' : Math.round(v) + ' Hz', ms = v => Math.round(v) + ' ms', pct1 = v => Math.round(v * 100) + '%';
+const sgn = v => (v > 0 ? '+' : '') + Math.round(v) + '%', db = v => (v > 0 ? '+' : '') + (+v).toFixed(1) + ' dB';
+const FXK = [
+  ['#fxa-knobs', 'fxaSize', 'Size', 0, 100, 1, pc], ['#fxa-knobs', 'fxaDecay', 'Decay', .2, 20, .1, v => v.toFixed(1) + ' s', { log: true }], ['#fxa-knobs', 'fxaPre', 'Predelay', 0, 200, 1, ms],
+  ['#fxa-knobs', 'fxaDamp', 'Damping', 0, 100, 1, pc], ['#fxa-knobs', 'fxaWidth', 'Stereo', 0, 100, 1, pc], ['#fxa-knobs', 'fxaTone', 'Tone', 800, 16000, 10, hz, { log: true }], ['#fxa-knobs', 'fxaRet', 'Return', 0, 1, .01, pct1],
+  ['#send-knobs', 'sendA', 'Send A', 0, 100, 1, pc], ['#send-knobs', 'sendB', 'Send B', 0, 100, 1, pc],
+  ['#eq-knobs', 'eqLow', 'Low', -12, 12, .5, db], ['#eq-knobs', 'eqMid', 'Mid', -12, 12, .5, db], ['#eq-knobs', 'eqMidHz', 'Mid freq', 200, 8000, 1, hz, { log: true }], ['#eq-knobs', 'eqHigh', 'High', -12, 12, .5, db],
+  ['#ch-knobs', 'chRate', 'Rate', .05, 8, .01, v => v.toFixed(2) + ' Hz', { log: true }], ['#ch-knobs', 'chDepth', 'Depth', 0, 100, 1, pc], ['#ch-knobs', 'fxbRet', 'Return', 0, 1, .01, pct1],
+  ['#fl-knobs', 'flRate', 'Rate', .02, 10, .01, v => v.toFixed(2) + ' Hz', { log: true, hideIf: 'flSync' }], ['#fl-knobs', 'flDepth', 'Depth', 0, 100, 1, pc], ['#fl-knobs', 'flFb', 'Feedback', -95, 95, 1, sgn],
+  ['#fl-knobs', 'flSpread', 'Stereo', 0, 100, 1, pc], ['#fl-knobs', 'flMix', 'Mix', 0, 1, .01, pct1, { insertOnly: true }], ['#fl-knobs', 'fxbRet', 'Return', 0, 1, .01, pct1, { sendOnly: true }],
+  ['#ph-knobs', 'phFreq', 'Frequency', 50, 8000, 1, hz, { log: true }], ['#ph-knobs', 'phDepth', 'Mod', 0, 100, 1, pc], ['#ph-knobs', 'phRate', 'Rate', .02, 10, .01, v => v.toFixed(2) + ' Hz', { log: true, hideIf: 'phSync' }],
+  ['#ph-knobs', 'phRes', 'Resonance', -95, 95, 1, sgn], ['#ph-knobs', 'phWidth', 'Stereo', 0, 100, 1, pc], ['#ph-knobs', 'phMix', 'Mix', 0, 1, .01, pct1, { insertOnly: true }], ['#ph-knobs', 'fxbRet', 'Return', 0, 1, .01, pct1, { sendOnly: true }],
+  ['#dl-left', 'dlOffL', 'Offset', -33, 33, 1, sgn, { showIf: 'dlSync' }], ['#dl-left', 'dlMsL', 'Time', 1, 2000, 1, ms, { log: true, hideIf: 'dlSync' }],
+  ['#dl-right', 'dlOffR', 'Offset', -33, 33, 1, sgn, { showIf: 'dlSync' }], ['#dl-right', 'dlMsR', 'Time', 1, 2000, 1, ms, { log: true, hideIf: 'dlSync' }],
+  ['#dl-fb', 'dlFb', 'Feedback', 0, 95, 1, pc], ['#dl-filt', 'dlFreq', 'Freq', 50, 18000, 1, hz, { log: true }], ['#dl-filt', 'dlWidth', 'Width', .5, 9, .1, v => v.toFixed(1) + ' oct'],
+  ['#dl-mod', 'dlMRate', 'Rate', .01, 10, .01, v => v.toFixed(2) + ' Hz', { log: true }], ['#dl-mod', 'dlMFilt', 'Filter', 0, 100, 1, pc], ['#dl-mod', 'dlMTime', 'Time', 0, 100, 1, pc], ['#dl-mix', 'fxbRet', 'Return', 0, 1, .01, pct1],
+  ['#dr-knobs', 'drDrive', 'Drive', 0, 10, .1, v => v.toFixed(1)], ['#dr-knobs', 'drLowcut', 'Low cut', 10, 800, 1, v => v <= 10.5 ? 'off' : hz(v), { log: true }], ['#dr-knobs', 'drTone', 'Tone', -1, 1, .01, v => Math.abs(v) < .02 ? 'flat' : (v < 0 ? 'dark ' : 'bright ') + Math.round(Math.abs(v) * 100)],
+  ['#dr-knobs', 'drHighcut', 'High cut', 1500, 20000, 10, v => v >= 19900 ? 'off' : hz(v), { log: true }], ['#dr-knobs', 'drMix', 'Mix', 0, 1, .01, pct1, { insertOnly: true }], ['#dr-knobs', 'drOut', 'Output', -24, 12, .5, db], ['#dr-knobs', 'fxbRet', 'Return', 0, 1, .01, pct1, { sendOnly: true }]
+];
+const FXCELLS = [];
+FXK.forEach(([box, id, label, min, max, step, fmt, extra = {}]) => {
+  const cell = document.createElement('div'); cell.className = 'kcell'; $(box).appendChild(cell);
+  const k = knob(cell, { label, min, max, step, value: min, fmt, log: !!extra.log, onChange: v => { st.params[id] = v; send({ type: 'param', id, value: v }); FXCELLS.forEach(c => c.id === id && c.k !== k && c.k.set(v)); renderFx(); } });
+  FXCELLS.push({ id, k, cell, extra });
+});
+document.querySelectorAll('select[data-psel]').forEach(s => s.addEventListener('change', () => { const id = s.dataset.psel, v = +s.value; st.params[id] = v; send({ type: 'param', id, value: v }); }));
+function renderFx() {
+  document.querySelectorAll('select[data-psel]').forEach(s => { const v = st.params[s.dataset.psel]; if (v !== undefined && document.activeElement !== s) s.value = String(Math.round(v)); });
+  const P = st.params, t = Math.round(P.fxbType ?? 0), ins = P.fxbIns > .5;
+  document.querySelectorAll('[data-fxb]').forEach(s => s.hidden = +s.dataset.fxb !== t);
+  FXCELLS.forEach(c => { if (P[c.id] !== undefined) c.k.set(P[c.id]);
+    const e = c.extra; c.cell.hidden = (e.insertOnly && !ins) || (e.sendOnly && ins) || (e.showIf && !(P[e.showIf] > .5)) || (e.hideIf && P[e.hideIf] > .5); });
+  document.querySelectorAll('[data-show]').forEach(el => { const show = P[el.dataset.show] > .5, hide = el.dataset.hide && P[el.dataset.hide] > .5; el.hidden = !show || hide; });
+  document.querySelectorAll('[data-hide]:not([data-show])').forEach(el => el.hidden = P[el.dataset.hide] > .5);
+  // reverb: Classic uses Size/Damping/Stereo, the others Decay
+  const cl = Math.round(P.fxaType ?? 0) === 0;
+  FXCELLS.forEach(c => { if (c.id === 'fxaSize' || c.id === 'fxaDamp' || c.id === 'fxaWidth') c.cell.hidden = !cl; if (c.id === 'fxaDecay') c.cell.hidden = cl; });
+}
+
 /* ---------- pages ---------- */
 function setPage(pg) { st.page = pg; document.querySelectorAll('.ptab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.page === pg))); document.querySelectorAll('.page').forEach(p => p.hidden = p.dataset.pg !== pg); if (pg === 'patch') renderPatch(); }
 document.querySelector('.pages').addEventListener('click', e => { const b = e.target.closest('.ptab'); if (b) setPage(b.dataset.page); });
@@ -380,7 +465,7 @@ document.querySelectorAll('[data-ltab]').forEach(b => b.addEventListener('click'
 
 /* ---------- patches: up to four layers, each a preset with its own level, pan, tuning and ranges ---------- */
 const NOTE = n => ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][n % 12] + (Math.floor(n / 12) - 2);
-const newLayer = src => ({ src: src || null, on: true, solo: false, volDb: 0, pan: 0, coarse: 0, fine: 0, key: { lo: 0, hi: 127 }, vel: { lo: 1, hi: 127 } });
+const newLayer = src => ({ src: src || null, on: true, solo: false, volDb: 0, pan: 0, coarse: 0, fine: 0, key: { lo: 0, hi: 127 }, vel: { lo: 1, hi: 127 }, sendA: 20, sendB: 0 });
 const presetSrc = i => ({ type: 'preset', name: st.presets[i], bank: st.bank || '' });
 function patchFrom(i) { return { name: (i >= 0 && st.presets[i] ? st.presets[i].replace(/^[a-z0-9]{2,4}:/i, '') + ' stack' : 'New patch').slice(0, 40), layers: [newLayer(i >= 0 ? presetSrc(i) : null), newLayer(), newLayer(), newLayer()] }; }
 let patchDirty = false;
@@ -391,9 +476,10 @@ const LY = {
   coarse: ['Coarse', -36, 36, 1, v => (v > 0 ? '+' : '') + v + ' st', 0],
   fine: ['Fine', -100, 100, 1, v => (v > 0 ? '+' : '') + Math.round(v) + ' ct', 0],
   keyLo: ['Key low', 0, 127, 1, NOTE, 0], keyHi: ['Key high', 0, 127, 1, NOTE, 127],
-  velLo: ['Vel low', 1, 127, 1, v => String(v), 1], velHi: ['Vel high', 1, 127, 1, v => String(v), 127]
+  velLo: ['Vel low', 1, 127, 1, v => String(v), 1], velHi: ['Vel high', 1, 127, 1, v => String(v), 127],
+  sendA: ['Send A', 0, 100, 1, v => Math.round(v) + '%', 20], sendB: ['Send B', 0, 100, 1, v => Math.round(v) + '%', 0]
 };
-const lyGet = (l, k) => k === 'keyLo' ? l.key.lo : k === 'keyHi' ? l.key.hi : k === 'velLo' ? l.vel.lo : k === 'velHi' ? l.vel.hi : l[k];
+const lyGet = (l, k) => k === 'keyLo' ? l.key.lo : k === 'keyHi' ? l.key.hi : k === 'velLo' ? l.vel.lo : k === 'velHi' ? l.vel.hi : (l[k] ?? LY[k][5]);
 const lySet = (l, k, v) => { if (k === 'keyLo') l.key.lo = Math.min(v, l.key.hi); else if (k === 'keyHi') l.key.hi = Math.max(v, l.key.lo); else if (k === 'velLo') l.vel.lo = Math.min(v, l.vel.hi); else if (k === 'velHi') l.vel.hi = Math.max(v, l.vel.lo); else l[k] = v; };
 const LK = {};
 for (const [k, [label, min, max, step, fmt, def]] of Object.entries(LY)) {

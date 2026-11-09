@@ -48,6 +48,7 @@ juce_generate_juce_header(XtremeLab)
 target_sources(XtremeLab PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
+    Source/Fx.cpp
     Source/engine/Bank.cpp
     Source/engine/Engine.cpp)
 
@@ -64,6 +65,7 @@ target_link_libraries(XtremeLab
     PRIVATE
         XtremeLabUI
         juce::juce_audio_utils
+        juce::juce_dsp
         juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags

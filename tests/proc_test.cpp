@@ -47,7 +47,29 @@ int main (int argc, char** argv) {
     for (int k = 0; k < 3; ++k) { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p2->processBlock (x, m); }
     printf ("restored: program %d '%s' cutShift %.2f oct knob A %.3f (shared bank: %s)\n", p2->getCurrentProgram(), p2->getProgramName (p2->getCurrentProgram()).toRawUTF8(),
             proc2->params.getRawParameterValue ("cutShift")->load(), proc2->knob (0), proc2->currentBank() == proc->currentBank() ? "yes" : "no");
-    // timing: how long 10 s of an 8-note unison chord takes to render
+    // effects: reverb tail, each FX B type as a send, drive as an insert
+    auto setp = [&] (const char* id, float v) { auto* r = dynamic_cast<juce::RangedAudioParameter*> (proc->params.getParameter (id)); r->setValueNotifyingHost (r->convertTo0to1 (v)); };
+    auto tail = [&] (const char* label) {
+        juce::AudioBuffer<float> buf (2, 512); double on = 0, after = 0; int nan = 0;
+        for (int k = 0; k < 150; ++k) {
+            juce::MidiBuffer m; buf.clear();
+            if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            if (k == 40) m.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+            p->processBlock (buf, m);
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < 512; ++i) if (! std::isfinite (buf.getSample (c, i))) ++nan;
+            if (k < 40) on += rms (buf); else if (k >= 70) after += rms (buf);
+        }
+        printf ("%-34s while held %.4f  0.6-1.6 s after release %.5f  nan %d\n", label, on / 40, after / 80, nan);
+    };
+    p->setCurrentProgram (2); { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p->processBlock (x, m); }
+    setp ("sendA", 0); setp ("sendB", 0); tail ("dry (no sends)");
+    setp ("sendA", 60); tail ("reverb send 60%");
+    setp ("sendA", 0); setp ("sendB", 60);
+    const char* names[] = { "chorus", "flanger", "phaser", "stereo delay", "drive" };
+    for (int t = 0; t < 5; ++t) { setp ("fxbType", (float) t); tail ((juce::String ("FX B send: ") + names[t]).toRawUTF8()); }
+    setp ("sendB", 0); setp ("fxbIns", 1); setp ("fxbType", 4); setp ("drDrive", 8); tail ("FX B insert: drive 8");
+    setp ("fxbIns", 0); setp ("sendA", 20);
+    // timing: how long 10 s of an 8-note chord takes to render
 
     auto t0 = juce::Time::getMillisecondCounterHiRes(); juce::AudioBuffer<float> buf (2, 512);
     for (int k = 0; k < 940; ++k) { juce::MidiBuffer m; buf.clear(); if (k == 0) for (int n : { 36, 43, 48, 55, 60, 64, 67, 72 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); p->processBlock (buf, m); }

@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "engine/Engine.h"
+namespace xfx { class FxRack; }
 
 // Xtreme Lab as a plugin: an Emulator X bank player with the browser version's engine.
 class ExwProcessor : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener {
@@ -65,6 +66,7 @@ public:
 
 private:
     exw::Engine engine { settings };
+    std::unique_ptr<xfx::FxRack> fxRack;
     mutable juce::SpinLock bankLock;
     std::shared_ptr<const exw::Bank> bank, pendingBank;
     std::atomic<bool> bankPending { false }, loading { false };
