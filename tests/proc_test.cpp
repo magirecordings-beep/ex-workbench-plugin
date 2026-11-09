@@ -85,6 +85,29 @@ int main (int argc, char** argv) {
         for (size_t i = 0; i < seq.size(); ++i) printf (" %d@%.0fms", seq[i], times[i] / 48.0);
         printf ("\n");
     }
+    { // mod: own envelope, LFO 1 square on volume, FG 1 major arp on pitch - block levels should wobble
+        std::vector<double> base;
+        auto wob = [&] (const char* label) {
+            juce::AudioBuffer<float> buf (2, 512); std::vector<double> r; int nan = 0;
+            for (int k = 0; k < 60; ++k) { juce::MidiBuffer m; buf.clear(); if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); if (k == 59) m.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                p->processBlock (buf, m); r.push_back (rms (buf)); for (int i = 0; i < 512; ++i) if (! std::isfinite (buf.getSample (0, i))) ++nan; }
+            int turns = 0; for (size_t i = 6; i + 1 < 58; ++i) if ((r[i] - r[i - 1]) * (r[i + 1] - r[i]) < 0 && std::fabs (r[i + 1] - r[i]) > .02 * r[i]) ++turns;
+            printf ("%-34s level turns %d  blocks 2-8:", label, turns); for (int i = 2; i < 9; ++i) printf (" %.3f", r[(size_t) i]); printf ("  nan %d\n", nan);
+            if (base.empty()) base = r; else { printf ("   vs none, every 4th block:"); for (size_t i = 4; i < 60; i += 4) printf (" %.2f", r[i] / std::max (1e-6, base[i])); printf ("\n"); }
+            for (int k = 0; k < 120; ++k) { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p->processBlock (x, m); }
+        };
+        p->setCurrentProgram (0); { juce::AudioBuffer<float> x (2, 512); juce::MidiBuffer m; p->processBlock (x, m); }
+        setp ("sendA", 0); setp ("cutShift", 0); wob ("no modulation");
+        setp ("lfo1Shape", 2); setp ("lfo1Rate", 3); setp ("lfo1Vol", 100); wob ("LFO 1 square 3 Hz on volume");
+        setp ("lfo1Vol", 0); setp ("envMode", 1); setp ("envA", 0.4f); wob ("own envelope, 0.4 s attack");
+        setp ("envMode", 0);
+        auto fg = juce::JSON::parse (R"([{"steps":[0,0.5,-0.5,1,0,0,0,0],"end":4,"sync":1,"div":"1/16","dir":"fwd","mode":"key","vol":100,"pitch":12}])");
+        proc->setFgs (fg); wob ("FG 1 steps on volume + pitch");
+        juce::MemoryBlock mb2; p->getStateInformation (mb2);
+        auto x2 = juce::AudioProcessor::getXmlFromBinary (mb2.getData(), (int) mb2.getSize());
+        printf ("state keeps FGs: %s\n", x2 && x2->toString().contains ("steps") ? "yes" : "NO");
+        proc->setFgs (juce::JSON::parse ("[]")); setp ("sendA", 20);
+    }
     // timing: how long 10 s of an 8-note chord takes to render
 
     auto t0 = juce::Time::getMillisecondCounterHiRes(); juce::AudioBuffer<float> buf (2, 512);

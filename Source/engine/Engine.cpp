@@ -63,7 +63,7 @@ void Engine::prepare (double rate) { sr = rate > 0 ? rate : 44100; master.prepar
 const Preset* Engine::cur() const { return bank && preset >= 0 && preset < (int) bank->presets.size() ? &bank->presets[(size_t) preset] : nullptr; }
 
 // E-MU envelope rate (stored 0..1) to seconds
-float Engine::rateSec (float x) const { x = std::max (0.0f, std::min (1.0f, x)); return 163.69f * (std::pow (2.0f, 11.0f * x) - 1.0f) / 2047.0f; }
+float Engine::rateSec (float x) const { x = std::max (0.0f, std::min (1.0f, x)); return 163.69f * (std::pow (2.0f, 11.0f * x) - 1.0f) / 2047.0f * set.envTime.load(); }
 
 void Engine::setBank (std::shared_ptr<const Bank> b) { allNotesOff(); for (auto& v : voices) v.active = false; bank = std::move (b); preset = -1; if (bank && ! bank->presets.empty()) setPreset (0); }
 
@@ -224,6 +224,7 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     float semis = (float) (note + v.transpose - z.root + v.coarse) + (v.fine + z.fine + set.tuneCents.load() + lyCents) / 100.0f;
     nv.baseRate = std::pow (2.0, semis / 12.0) * s->rate / sr;
     nv.layer = lyIdx; nv.lyG = lyGain;
+    for (int k = 0; k < 3; ++k) { nv.ulfoPh[k] = 0; nv.ulfoHold[k][0] = 0; nv.ulfoHold[k][1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); nv.fg[k] = FgRun(); }
     nv.baseGain = std::pow (10.0f, v.volDb / 20.0f); nv.basePan = std::max (-1.0f, std::min (1.0f, v.pan / 64.0f + lyPan));
     float fixed[8]; planMod (nv, v, note, vel, fixed);
     nv.fixedPitch = fixed[0] + fixed[1]; nv.fixedFilt = fixed[2]; nv.cordPan = fixed[5];
@@ -232,6 +233,12 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     float es[6], el[6];
     if (! v.envs.empty()) for (int i = 0; i < 6; ++i) { es[i] = rateSec (v.envs[0].t[i]); el[i] = v.envs[0].l[i]; }
     else { const float ds[6] = { .002f, 0, .6f, 0, .35f, 0 }, dl[6] = { 100, 100, 100, 100, 0, 0 }; for (int i = 0; i < 6; ++i) { es[i] = ds[i]; el[i] = dl[i]; } }
+    if (set.envMode.load() == 1) { // the Envelope panel's own ADSR replaces the preset's amp envelope
+        const float S = std::max (0.0f, std::min (100.0f, set.envS.load()));
+        const float ds[6] = { set.envA.load(), 0, set.envD.load(), 0, set.envR.load(), 0 }, dl[6] = { 100, 100, S, S, 0, 0 };
+        for (int i = 0; i < 6; ++i) { es[i] = ds[i]; el[i] = dl[i]; }
+        const float vs = set.envVel.load(); nv.amp *= (1 - vs) + vs * (vel / 127.0f);
+    }
     float tt = 0; nv.envPts[0][0] = 0; nv.envPts[0][1] = 0;
     for (int i = 0; i < 4; ++i) { tt += std::max (i ? 0.0f : .003f, es[i]); nv.envPts[i + 1][0] = tt; nv.envPts[i + 1][1] = nv.amp * std::max (0.0f, el[i]) / 100.0f; }
     nv.r1 = std::max (.008f, es[4]); nv.r2 = std::max (.008f, es[5]); nv.relL1 = nv.amp * std::max (0.0f, el[4]) / 100.0f;
@@ -305,6 +312,31 @@ float Engine::envLevel (const NoteVoice& nv) const {
     double t = nv.envT;
     for (int i = 1; i < 5; ++i) if (t < nv.envPts[i][0]) { double t0 = nv.envPts[i - 1][0], t1 = nv.envPts[i][0]; float a = nv.envPts[i - 1][1], b = nv.envPts[i][1]; return t1 > t0 ? (float) (a + (b - a) * (t - t0) / (t1 - t0)) : b; }
     return nv.envPts[4][1];
+}
+
+// ---------- function generators ----------
+double Engine::fgStepSec (const FgDef& f) const {
+    static const double div[6] = { 1, .5, 1.0 / 3, .25, 1.0 / 6, .125 };
+    return f.sync ? 60.0 / std::max (20.0f, set.tempo.load()) * div[std::max (0, std::min (5, f.div))] : 1.0 / std::max (.05f, f.rate);
+}
+void Engine::fgAdvance (const FgDef& f, FgRun& r, double dt) {
+    const int n = std::max (1, std::min (64, f.end));
+    auto next = [&] {
+        if (r.i < 0) { r.i = f.dir == 1 ? n - 1 : (f.dir == 3 || f.dir == 4) ? (int) (lfoRng() % (unsigned) n) : 0; r.d = 1; return; }
+        switch (f.dir) {
+            case 1: r.i = (r.i - 1 + n) % n; break;
+            case 2: if (n > 1) { if (r.i + r.d >= n || r.i + r.d < 0) r.d = -r.d; r.i += r.d; } break;
+            case 3: r.i = (int) (lfoRng() % (unsigned) n); break;
+            case 4: r.i = n < 2 ? 0 : r.i == 0 ? 1 : r.i == n - 1 ? n - 2 : r.i + ((lfoRng() & 1) ? 1 : -1); break;
+            case 5: if (r.i < n - 1) ++r.i; else r.done = true; break;
+            default: r.i = (r.i + 1) % n;
+        }
+        r.i = std::min (r.i, n - 1);
+    };
+    const double d = fgStepSec (f);
+    if (r.i < 0) { next(); r.from = r.cur = f.steps[r.i]; r.t = 0; return; }
+    r.t += dt;
+    while (r.t >= d && ! r.done) { r.t -= d; r.from = r.cur; next(); if (! r.done) r.cur = f.steps[r.i]; }
 }
 
 // ---------- notes ----------
@@ -477,6 +509,10 @@ void Engine::renderChunk (float* L, float* R, int n) {
             if (driftPh[k] >= 1) { driftPh[k] -= 1; driftFrom[k] = driftTo[k]; driftTo[k] = (float) std::uniform_real_distribution<> (-1, 1) (rng); }
             drift[k] = driftFrom[k] + (driftTo[k] - driftFrom[k]) * (float) (.5 - .5 * std::cos (PI * driftPh[k]));
         }
+        for (int k = 0; k < 3; ++k) {
+            if (set.lfo[k].free.load()) { const double nph = lfoFreePh[k] + set.lfo[k].rate.load() * subDur; if (std::floor (nph) != std::floor (lfoFreePh[k])) { lfoFreeHold[k][0] = lfoFreeHold[k][1]; lfoFreeHold[k][1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); } lfoFreePh[k] = nph - std::floor (nph); }
+            if (fgs[k].free && fgs[k].used()) fgAdvance (fgs[k], fgFree[k], subDur);
+        }
         for (auto& nv : voices) {
             if (! nv.active) continue;
             // --- control-rate values at the start of this sub-block ---
@@ -507,6 +543,42 @@ void Engine::renderChunk (float* L, float* R, int n) {
                 float c = sig * g;
                 if (r.dst == DST_PITCH || r.dst == DST_FINE) pitch += c; else if (r.dst == DST_FILT) filt += c; else if (r.dst == DST_PAN) pan += c; else if (r.dst == DST_VOL) vol += c / 72.0f;
             }
+            // the three LFOs and the function generators (all voices)
+            float trem = 1;
+            for (int k = 0; k < 3; ++k) {
+                const auto& L = set.lfo[k];
+                const float dp = L.pitch.load(), df = L.filter.load(), dv = L.vol.load(), dn = L.pan.load();
+                if (! dp && ! df && ! dv && ! dn) continue;
+                const bool freeRun = L.free.load(); const int shp = L.shape.load();
+                double& ph = freeRun ? lfoFreePh[k] : nv.ulfoPh[k]; float* hold = freeRun ? lfoFreeHold[k] : nv.ulfoHold[k];
+                const double u = ph - std::floor (ph);
+                float val;
+                switch (shp) {
+                    case 1: val = (float) (1 - 4 * std::fabs (u - .5)); break;
+                    case 2: val = u < .5 ? 1.0f : -1.0f; break;
+                    case 3: val = (float) (2 * u - 1); break;
+                    case 4: val = (float) (1 - 2 * u); break;
+                    case 5: val = hold[1]; break;
+                    case 6: val = hold[0] + (hold[1] - hold[0]) * (float) (.5 - .5 * std::cos (PI * u)); break;
+                    default: val = (float) std::sin (2 * PI * u);
+                }
+                const float dly = L.delay.load(); if (dly > 0) val *= (float) std::min (1.0, nv.envT / dly);
+                pitch += (dp < 0 ? -1 : 1) * (dp / 100) * (dp / 100) * 1200 * val;
+                filt += (df < 0 ? -1 : 1) * (df / 100) * (df / 100) * 4800 * val;
+                const float tv = std::fabs (dv) / 200; trem += tv * (val - 1);
+                pan += val * dn / 100;
+                if (! freeRun) { const double nph = ph + L.rate.load() * subDur; if (std::floor (nph) != std::floor (ph)) { hold[0] = hold[1]; hold[1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); } ph = nph; }
+            }
+            for (int k = 0; k < 3; ++k) {
+                const auto& f = fgs[k]; if (! f.used()) continue;
+                FgRun& r = f.free ? fgFree[k] : nv.fg[k];
+                if (! f.free) fgAdvance (f, r, subDur);
+                float v = r.cur;
+                if (f.smooth) { const double d = fgStepSec (f); v = r.from + (r.cur - r.from) * (float) std::min (1.0, r.t / std::max (1e-4, d)); }
+                pitch += v * f.pitch * 100; filt += (f.filter < 0 ? -1 : 1) * (f.filter / 100) * (f.filter / 100) * 4800 * v;
+                const float tv = std::fabs (f.vol) / 200; trem += tv * (v - 1); pan += v * f.pan / 100;
+            }
+            vol *= std::max (0.0f, trem);
             // bend and glide
             pitch += ctrlVal[16] * (nv.ownBend ? nv.bendCents : set.bendRange.load() * 100.0f);
             if (nv.glideDur > 0 && nv.glideT < nv.glideDur) { pitch += (float) (nv.glideFrom + (nv.glideTo - nv.glideFrom) * nv.glideT / nv.glideDur); nv.glideT += subDur; }

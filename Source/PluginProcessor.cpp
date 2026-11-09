@@ -32,6 +32,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
     f ("colWeight", "Weight", 0, 100, 40, 1, "%");
     f ("colSub", "Sub", 0, 100, 25, 1, "%");
     f ("colSmooth", "Smooth", 0, 100, 20, 1, "%");
+    // amp envelope
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "envMode", 1 }, "Amp envelope", StringArray { "Preset", "Own" }, 0));
+    auto fs = [&] (const char* id, const char* name, float lo, float hi, float def, float centre, const char* unit) { NormalisableRange<float> r (lo, hi, 0); r.setSkewForCentre (centre);
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, r, def, AudioParameterFloatAttributes().withLabel (unit))); };
+    fs ("envA", "Attack", .001f, 10, .002f, .3f, "s"); fs ("envD", "Decay", .001f, 10, .6f, .5f, "s");
+    f ("envS", "Sustain", 0, 100, 100, 1, "%"); fs ("envR", "Release", .005f, 10, .35f, .5f, "s");
+    f ("envVel", "Velocity", 0, 1, .7f, .01f, ""); fs ("envTime", "Preset envelope time", .25f, 4, 1, 1, "x");
+    // three LFOs on every voice
+    const float rates[3] = { 5, .5f, .25f }; const int shapes[3] = { 0, 1, 6 };
+    for (int k = 0; k < 3; ++k) {
+        auto id = [&] (const char* s) { return juce::String ("lfo") + juce::String (k + 1) + s; };
+        auto nm = [&] (const char* s) { return juce::String ("LFO ") + juce::String (k + 1) + " " + s; };
+        l.add (std::make_unique<AudioParameterChoice> (ParameterID { id ("Shape"), 1 }, nm ("shape"), StringArray { "Sine", "Triangle", "Square", "Saw up", "Saw down", "Random", "Smooth random" }, shapes[k]));
+        { NormalisableRange<float> r (.05f, 20, 0); r.setSkewForCentre (1); l.add (std::make_unique<AudioParameterFloat> (ParameterID { id ("Rate"), 1 }, nm ("rate"), r, rates[k], AudioParameterFloatAttributes().withLabel ("Hz"))); }
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id ("Delay"), 1 }, nm ("delay"), NormalisableRange<float> (0, 5, .01f), 0, AudioParameterFloatAttributes().withLabel ("s")));
+        l.add (std::make_unique<AudioParameterBool> (ParameterID { id ("Free"), 1 }, nm ("free running"), false));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id ("Pitch"), 1 }, nm ("to pitch"), NormalisableRange<float> (-100, 100, 1), 0));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id ("Filter"), 1 }, nm ("to filter"), NormalisableRange<float> (-100, 100, 1), 0));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id ("Vol"), 1 }, nm ("to volume"), NormalisableRange<float> (0, 100, 1), 0));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id ("Pan"), 1 }, nm ("to pan"), NormalisableRange<float> (-100, 100, 1), 0));
+    }
     // arpeggiator
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpMode", 1 }, "Arpeggiator", StringArray { "Off", "On", "Latch" }, 0));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpPattern", 1 }, "Arp pattern", StringArray { "Up", "Down", "Up and down", "Down and up", "As played", "Random", "Chord repeat" }, 0));
@@ -95,6 +116,13 @@ void ExwProcessor::pushSettings() {
     settings.keys = (int) v ("keys"); settings.glideMode = (int) v ("glideMode"); settings.glideMs = v ("glideMs");
     settings.uniOn = false;
     settings.cutShiftOct = v ("cutShift"); settings.resShift = v ("resShift");
+    settings.envMode = (int) v ("envMode"); settings.envA = v ("envA"); settings.envD = v ("envD"); settings.envS = v ("envS"); settings.envR = v ("envR");
+    settings.envVel = v ("envVel"); settings.envTime = v ("envTime");
+    for (int k = 0; k < 3; ++k) {
+        auto g = [&] (const char* s) { return params.getRawParameterValue (juce::String ("lfo") + juce::String (k + 1) + s)->load(); };
+        auto& L = settings.lfo[k]; L.shape = (int) g ("Shape"); L.rate = g ("Rate"); L.delay = g ("Delay"); L.free = g ("Free") > .5f;
+        L.pitch = g ("Pitch"); L.filter = g ("Filter"); L.vol = g ("Vol"); L.pan = g ("Pan");
+    }
     settings.bendOwn = v ("bendOwn") > .5f; settings.bendRange = v ("bendRange");
     settings.colOn = v ("colOn") > .5f; settings.colMono = v ("colMono") > .5f;
     settings.colWarmth = v ("colWarmth"); settings.colWeight = v ("colWeight"); settings.colSub = v ("colSub"); settings.colSmooth = v ("colSmooth");
@@ -172,6 +200,10 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         const juce::SpinLock::ScopedTryLockType l (patchLock);
         if (l.isLocked()) { engine.setPatch (pendingPatch, pendingPatchReset); pendingPatchReset = false; patchPending = false; }
     }
+    if (fgPending.load()) {
+        const juce::SpinLock::ScopedTryLockType l (fgLock);
+        if (l.isLocked()) { for (int k = 0; k < 3; ++k) engine.setFg (k, pendingFg[k]); fgPending = false; }
+    }
     // host automation of the A-P knobs (only when the host actually moved one)
     for (int i = 0; i < 16; ++i) {
         float pv = params.getRawParameterValue (knobId (i))->load();
@@ -181,7 +213,7 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     // tempo for synced delay / flanger / phaser and the arpeggiator: the host's, else 120
     double hostBpm = 120; std::optional<double> ppq; bool playing = false;
     if (auto* ph = getPlayHead()) if (auto pos = ph->getPosition()) {
-        if (auto bpm = pos->getBpm()) { hostBpm = *bpm; fxRack->setTempo (*bpm); }
+        if (auto bpm = pos->getBpm()) { hostBpm = *bpm; fxRack->setTempo (*bpm); settings.tempo = (float) *bpm; }
         if (auto q = pos->getPpqPosition()) ppq = *q;
         playing = pos->getIsPlaying();
     }
@@ -224,6 +256,7 @@ void ExwProcessor::getStateInformation (juce::MemoryBlock& dest) {
     extra.setProperty ("knobs", knobs, nullptr);
     extra.setProperty ("patch", curPatch.isObject() ? juce::JSON::toString (curPatch, true) : juce::String(), nullptr);
     extra.setProperty ("patchOn", patchOn.load(), nullptr);
+    extra.setProperty ("fgs", fgVar.isArray() ? juce::JSON::toString (fgVar, true) : juce::String(), nullptr);
     state.removeChild (state.getChildWithName ("EXWSTATE"), nullptr);
     state.appendChild (extra, nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
@@ -243,11 +276,31 @@ void ExwProcessor::setStateInformation (const void* data, int size) {
         auto kv = juce::StringArray::fromTokens (extra["knobs"].toString(), ",", "");
         for (int i = 0; i < 16; ++i) restoreKnobs[(size_t) i] = i < kv.size() ? kv[i].getFloatValue() : -1.0f;
         restoreKnobsPending = kv.size() == 16;
+        auto fj = juce::JSON::parse (extra["fgs"].toString()); if (fj.isArray()) setFgs (fj);
         auto pj = juce::JSON::parse (extra["patch"].toString());
         if (pj.isObject()) { curPatch = pj; restorePatchOn = (bool) extra["patchOn"]; }
         if (f.existsAsFile()) loadBankAsync (f, juce::jmax (0, preset));
         else if (extra["bank"].toString().isNotEmpty()) { const juce::SpinLock::ScopedLockType l (bankLock); status = "Bank not found: " + extra["bank"].toString(); lastBankFile = f; }
     }
+}
+
+// ---------- function generators ----------
+void ExwProcessor::setFgs (const juce::var& list) {
+    fgVar = list;
+    exw::FgDef defs[3];
+    auto* a = list.getArray();
+    for (int k = 0; k < 3; ++k) {
+        juce::var f = a && k < a->size() ? (*a)[k] : juce::var(); if (! f.isObject()) continue;
+        auto& d = defs[k]; auto num = [&] (const char* key, double def) { auto x = f[key]; return x.isVoid() || x.isUndefined() ? def : (double) x; };
+        if (auto* st = f["steps"].getArray()) for (int i = 0; i < 64 && i < st->size(); ++i) d.steps[i] = juce::jlimit (-1.0f, 1.0f, (float) (double) (*st)[i]);
+        d.end = juce::jlimit (1, 64, (int) num ("end", 8)); d.sync = (bool) num ("sync", 1); d.rate = (float) num ("rate", 6);
+        static const char* DIVS[6] = { "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32" }; d.div = 3; for (int i = 0; i < 6; ++i) if (f["div"].toString() == DIVS[i]) d.div = i;
+        static const char* DIRS[6] = { "fwd", "rev", "pend", "rand", "brown", "once" }; d.dir = 0; for (int i = 0; i < 6; ++i) if (f["dir"].toString() == DIRS[i]) d.dir = i;
+        d.smooth = (bool) num ("smooth", 0); d.free = f["mode"].toString() == "free";
+        d.pitch = (float) num ("pitch", 0); d.filter = (float) num ("filter", 0); d.vol = (float) num ("vol", 0); d.pan = (float) num ("pan", 0);
+    }
+    const juce::SpinLock::ScopedLockType l (fgLock);
+    for (int k = 0; k < 3; ++k) pendingFg[k] = defs[k]; fgPending = true;
 }
 
 // ---------- patches ----------

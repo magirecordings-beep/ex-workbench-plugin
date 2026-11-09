@@ -44,6 +44,8 @@ public:
     juce::var patchLibrary();
     void storePatchLibrary (const juce::var& list);
     int patchVersion() const { return patchVer.load(); }
+    void setFgs (const juce::var& list);   // the three function generators (browser-format objects)
+    juce::var fgList() const { return fgVar; }
     // on-screen pitch and mod wheels
     void queueBend (int value14) { uiNotes.addMessageToQueue (juce::MidiMessage::pitchWheel (1, juce::jlimit (0, 16383, value14))); }
     void queueCC (int cc, int value) { uiNotes.addMessageToQueue (juce::MidiMessage::controllerEvent (1, juce::jlimit (0, 127, cc), juce::jlimit (0, 127, value))); }
@@ -86,6 +88,7 @@ private:
     juce::var curPatch; std::atomic<bool> patchOn { false }; std::atomic<int> patchVer { 0 };
     juce::SpinLock patchLock; exw::Patch pendingPatch; std::atomic<bool> patchPending { false }; bool pendingPatchReset = false;
     exw::Patch resolvePatch (const juce::var& p) const; bool restorePatchOn = false;
+    juce::var fgVar; juce::SpinLock fgLock; exw::FgDef pendingFg[3]; std::atomic<bool> fgPending { false };
 
     void parameterChanged (const juce::String& id, float value) override;
     void pushSettings();

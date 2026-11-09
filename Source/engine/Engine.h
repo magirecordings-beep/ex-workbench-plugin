@@ -31,7 +31,26 @@ struct Settings {
     std::atomic<float> colWarmth { 35 }, colWeight { 40 }, colSub { 25 }, colSmooth { 20 };
     // Filter panel on presets: shift every voice's filter (octaves, resonance %)
     std::atomic<float> cutShiftOct { 0 }, resShift { 0 };
+    // amp envelope: 0 = the preset's own (times scaled by envTime), 1 = own ADSR
+    std::atomic<int> envMode { 0 };
+    std::atomic<float> envA { .002f }, envD { .6f }, envS { 100 }, envR { .35f }, envVel { .7f }, envTime { 1 };
+    // three LFOs on every voice: shape 0 sine 1 triangle 2 square 3 saw up 4 saw down 5 random 6 smooth random
+    struct Lfo { std::atomic<int> shape { 0 }; std::atomic<float> rate { 5 }, delay { 0 }; std::atomic<bool> free { false }; std::atomic<float> pitch { 0 }, filter { 0 }, vol { 0 }, pan { 0 }; };
+    Lfo lfo[3];
+    std::atomic<float> tempo { 120 };    // for synced function generators
     Settings();
+};
+
+// a function generator: a row of steps (-1..1) played in time, to pitch (semitones), filter, volume and pan
+struct FgDef {
+    float steps[64] {};
+    int end = 8;
+    bool sync = true; int div = 3;   // 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32
+    float rate = 6;                  // steps per second when not synced
+    int dir = 0;                     // forward, reverse, pendulum, random, walk, once
+    bool smooth = false, free = false;
+    float pitch = 0, filter = 0, vol = 0, pan = 0;
+    bool used() const { if (! pitch && ! filter && ! vol && ! pan) return false; for (int i = 0; i < end && i < 64; ++i) if (steps[i] != 0) return true; return false; }
 };
 
 // the effects live outside the engine (the plugin supplies them): the engine fills two send buses per block,
@@ -64,7 +83,8 @@ public:
     void prepare (double sampleRate);
     void setBank (std::shared_ptr<const Bank> bank);   // audio thread
     void setPreset (int index);                           // audio thread; resets controllers to the preset's starts
-    void setPatch (const Patch& p, bool reset);           // audio thread; reset = a new patch (notes stop), else a live edit
+    void setPatch (const Patch& p, bool reset);
+    void setFg (int i, const FgDef& f) { if (i >= 0 && i < 3) fgs[i] = f; }   // audio thread           // audio thread; reset = a new patch (notes stop), else a live edit
     bool patchActive() const { return patch.active; }
     int presetIndex() const { return preset; }
 
@@ -95,6 +115,7 @@ private:
     struct ModEnv { float pts[6][2]; int n = 0; double t = 0; float v = 0; bool rel = false; float relFrom = 0, r1 = 0, r2 = 0, l4 = 0, l5 = 0; double relT = 0; };
     struct VLfo { double ph = 0; float rate = 1; int shape = 0; float delay = 0; };
     struct Copy { double pos = 0; float det = 0, gl = 1, gr = 1; int drift = -1; };
+    struct FgRun { int i = -1, d = 1; double t = 0; float from = 0, cur = 0; bool done = false; };
     struct NoteVoice {
         bool active = false, releasing = false, ended = false;
         int note = 60, startNote = 60, vel = 100; uint64_t age = 0;
@@ -114,7 +135,8 @@ private:
         std::vector<Copy> copies; bool stereoPath = false;
         float panNow = 0;
         int kb = 0; int monoGroup = -1;
-        int layer = -1; float lyG = 1; float sa = 0, sb = 0;   // patch layer (-1 none) and its level, following the layer's volume live
+        int layer = -1; float lyG = 1; float sa = 0, sb = 0;
+        double ulfoPh[3] {}; float ulfoHold[3][2] {}; FgRun fg[3];   // the LFO and function generator runs of this note   // patch layer (-1 none) and its level, following the layer's volume live
     };
     struct MonoGroup { const Voice* vd = nullptr; std::vector<std::pair<int, int>> held; int cur = -1; int m = 0; };
 
@@ -134,6 +156,11 @@ private:
     float masterGain = .24f;
     Patch patch;
     FxHook* fx = nullptr;
+    FgDef fgs[3];
+    FgRun fgFree[3]; double lfoFreePh[3] {}; float lfoFreeHold[3][2] {};
+    std::mt19937 lfoRng { 99 };
+    void fgAdvance (const FgDef& f, FgRun& r, double dt);
+    double fgStepSec (const FgDef& f) const;
     std::vector<float> busA[2], busB[2];
     void renderChunk (float* L, float* R, int n);
     // the layer a note is being started for (set around startNote)

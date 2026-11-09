@@ -100,6 +100,7 @@ void ExwEditor::sendState (bool withPresets) {
     msg.getDynamicObject()->setProperty ("patchOn", proc.patchPlaying());
     juce::Array<juce::var> names; if (auto* a = proc.patchLibrary().getArray()) for (auto& p : *a) names.add (p["name"]);
     msg.getDynamicObject()->setProperty ("patches", names);
+    msg.getDynamicObject()->setProperty ("fgs", proc.fgList());
     send (msg);
     sentBankVer = proc.bankVersion(); sentPreset = proc.shownPreset(); sentLearn = proc.learnedVersion(); sentPatchVer = proc.patchVersion();
 }
@@ -143,6 +144,7 @@ void ExwEditor::handle (const juce::var& m) {
     }
     else if (type == "patch") { proc.setPatch (m["patch"], (bool) m["reset"]); sentPatchVer = proc.patchVersion(); } // the UI already shows it
     else if (type == "leavePatch") proc.leavePatch();
+    else if (type == "fgs") proc.setFgs (m["fgs"]);
     else if (type == "patchSave") {
         // store under its name (replacing one with the same name)
         auto lib = proc.patchLibrary(); auto* a = lib.getArray(); auto p = m["patch"]; auto nm = p["name"].toString();
