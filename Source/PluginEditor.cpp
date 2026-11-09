@@ -95,14 +95,19 @@ void ExwEditor::sendState (bool withPresets) {
     juce::Array<juce::var> knobs; for (int i = 0; i < 16; ++i) { knobs.add (proc.knob (i)); sentKnobs[i] = proc.knob (i); }
     msg.getDynamicObject()->setProperty ("knobs", knobs);
     if (withPresets) msg.getDynamicObject()->setProperty ("presets", presets);
+    // patches: the one playing (if any) and the saved library's names
+    msg.getDynamicObject()->setProperty ("patch", proc.currentPatch());
+    msg.getDynamicObject()->setProperty ("patchOn", proc.patchPlaying());
+    juce::Array<juce::var> names; if (auto* a = proc.patchLibrary().getArray()) for (auto& p : *a) names.add (p["name"]);
+    msg.getDynamicObject()->setProperty ("patches", names);
     send (msg);
-    sentBankVer = proc.bankVersion(); sentPreset = proc.shownPreset(); sentLearn = proc.learnedVersion();
+    sentBankVer = proc.bankVersion(); sentPreset = proc.shownPreset(); sentLearn = proc.learnedVersion(); sentPatchVer = proc.patchVersion();
 }
 
 void ExwEditor::timerCallback() {
     if (! ready) return;
     if (proc.bankVersion() != sentBankVer) { sendState (true); return; }
-    if (proc.shownPreset() != sentPreset || proc.learnedVersion() != sentLearn) { sendState (false); return; }
+    if (proc.shownPreset() != sentPreset || proc.learnedVersion() != sentLearn || proc.patchVersion() != sentPatchVer) { sendState (false); return; }
     // live status: notes, knob positions (MIDI moves them), loading progress, parameters the host changed
     juce::Array<juce::var> knobs; bool knobsMoved = false;
     for (int i = 0; i < 16; ++i) { float k = proc.knob (i); knobs.add (k); if (std::abs (k - sentKnobs[i]) > 1e-4f) { knobsMoved = true; sentKnobs[i] = k; } }
@@ -135,6 +140,38 @@ void ExwEditor::handle (const juce::var& m) {
             r->beginChangeGesture(); r->setValueNotifyingHost (r->convertTo0to1 (v)); r->endChangeGesture();
             sentParams[r->getParameterID()] = r->convertFrom0to1 (r->getValue());
         }
+    }
+    else if (type == "patch") { proc.setPatch (m["patch"], (bool) m["reset"]); sentPatchVer = proc.patchVersion(); } // the UI already shows it
+    else if (type == "leavePatch") proc.leavePatch();
+    else if (type == "patchSave") {
+        // store under its name (replacing one with the same name)
+        auto lib = proc.patchLibrary(); auto* a = lib.getArray(); auto p = m["patch"]; auto nm = p["name"].toString();
+        int at = -1; for (int i = 0; i < a->size(); ++i) if ((*a)[i]["name"].toString() == nm) at = i;
+        if (at >= 0) a->set (at, p); else a->add (p);
+        proc.storePatchLibrary (lib);
+    }
+    else if (type == "patchLoad") { auto lib = proc.patchLibrary(); int i = (int) m["index"]; if (auto* a = lib.getArray(); a && i >= 0 && i < a->size()) proc.setPatch ((*a)[i], true); }
+    else if (type == "patchDelete") { auto lib = proc.patchLibrary(); int i = (int) m["index"]; if (auto* a = lib.getArray(); a && i >= 0 && i < a->size()) { a->remove (i); proc.storePatchLibrary (lib); } }
+    else if (type == "patchImport") {
+        chooser = std::make_unique<juce::FileChooser> ("Open Xtreme Lab patches (.exwp)", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.exwp;*.json");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems, [this] (const juce::FileChooser& fc) {
+            auto lib = proc.patchLibrary(); auto* a = lib.getArray(); int n = 0;
+            for (auto& f : fc.getResults()) {
+                auto j = juce::JSON::parse (f.loadFileAsString());
+                if (auto* ps = j["patches"].getArray()) for (auto& p : *ps) if (p.isObject()) { a->add (p); ++n; }
+            }
+            if (n) { proc.storePatchLibrary (lib); send (obj ({ { "type", "toast" }, { "text", "Added " + juce::String (n) + " patch" + (n > 1 ? "es." : ".") } })); }
+            else if (fc.getResults().size()) send (obj ({ { "type", "toast" }, { "text", "No Xtreme Lab patches in that file." } }));
+        });
+    }
+    else if (type == "patchExport") {
+        chooser = std::make_unique<juce::FileChooser> ("Save patches", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Xtreme Lab patches.exwp"), "*.exwp");
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc) {
+            auto f = fc.getResult(); if (f == juce::File()) return;
+            auto out = obj ({ { "format", "ex-workbench-patch" }, { "version", 1 }, { "patches", proc.patchLibrary() } });
+            f.withFileExtension (".exwp").replaceWithText (juce::JSON::toString (out));
+            send (obj ({ { "type", "toast" }, { "text", "Saved " + f.withFileExtension (".exwp").getFileName() } }));
+        });
     }
     else if (type == "note") proc.queueNote ((int) m["note"], (int) m["vel"]);
     else if (type == "bend") proc.queueBend ((int) m["value"]);

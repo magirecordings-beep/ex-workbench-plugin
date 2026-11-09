@@ -69,7 +69,7 @@ void Engine::setBank (std::shared_ptr<const Bank> b) { allNotesOff(); for (auto&
 
 void Engine::setPreset (int i) {
     if (! bank || i < 0 || i >= (int) bank->presets.size()) return;
-    preset = i; monoGroups.clear(); lastSolo.clear();
+    preset = i; patch.active = false; monoGroups.clear(); lastSolo.clear();
     auto& p = bank->presets[(size_t) i];
     for (int k = 0; k < 16; ++k) ctrlVal[MIDI_AP[k]] = p.hasIc ? p.ic[(size_t) k] / 127.0f : 0.0f;
     apChanged.store (0xffff);
@@ -220,10 +220,11 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     if (! nvp) { for (auto& x : voices) if (! nvp || (x.releasing && ! nvp->releasing) || (x.releasing == nvp->releasing && x.age < nvp->age)) nvp = &x; }
     NoteVoice& nv = *nvp;
     nv = NoteVoice();
-    nv.active = true; nv.note = note; nv.startNote = note; nv.vel = vel; nv.age = ++ageCounter; nv.s = s; nv.vd = &v; nv.pre = cur(); nv.monoGroup = group;
-    float semis = (float) (note + v.transpose - z.root + v.coarse) + (v.fine + z.fine + set.tuneCents.load()) / 100.0f;
+    nv.active = true; nv.note = note; nv.startNote = note; nv.vel = vel; nv.age = ++ageCounter; nv.s = s; nv.vd = &v; nv.pre = playing ? playing : cur(); nv.monoGroup = group;
+    float semis = (float) (note + v.transpose - z.root + v.coarse) + (v.fine + z.fine + set.tuneCents.load() + lyCents) / 100.0f;
     nv.baseRate = std::pow (2.0, semis / 12.0) * s->rate / sr;
-    nv.baseGain = std::pow (10.0f, v.volDb / 20.0f); nv.basePan = v.pan / 64.0f;
+    nv.layer = lyIdx; nv.lyG = lyGain;
+    nv.baseGain = std::pow (10.0f, v.volDb / 20.0f); nv.basePan = std::max (-1.0f, std::min (1.0f, v.pan / 64.0f + lyPan));
     float fixed[8]; planMod (nv, v, note, vel, fixed);
     nv.fixedPitch = fixed[0] + fixed[1]; nv.fixedFilt = fixed[2]; nv.cordPan = fixed[5];
     nv.amp = std::pow (10.0f, fixed[4] / 20.0f);
@@ -312,9 +313,25 @@ void Engine::noteOn (int note, int vel) {
     vel = std::max (1, std::min (127, vel));
     susHeld[(size_t) note] = true;
     if (susPending[(size_t) note]) { susPending[(size_t) note] = false; noteOffNow (note); }
-    const Preset* p = cur(); if (! p) return;
     int prev = lastNote; lastNote = note;
-    for (auto& v : p->voices) {
+    if (patch.active && bank) {
+        bool anySolo = false; for (auto& l : patch.layers) if (l.on && l.solo && l.preset >= 0) anySolo = true;
+        for (auto& l : patch.layers) {
+            if (! l.on || l.preset < 0 || l.preset >= (int) bank->presets.size() || (anySolo && ! l.solo)) continue;
+            if (note < l.keyLo || note > l.keyHi || vel < l.velLo || vel > l.velHi) continue;
+            lyIdx = (int) (&l - patch.layers); lyGain = layerLevel (lyIdx); lyPan = l.pan / 100.0f; lyCents = l.coarse * 100.0f + l.fine;
+            playPreset (bank->presets[(size_t) l.preset], note, vel, prev);
+        }
+        lyGain = 1; lyPan = 0; lyCents = 0; lyIdx = -1;
+        return;
+    }
+    const Preset* p = cur(); if (! p) return;
+    playPreset (*p, note, vel, prev);
+}
+
+void Engine::playPreset (const Preset& p, int note, int vel, int prev) {
+    playing = &p;
+    for (auto& v : p.voices) {
         if (note < v.key.lo || note > v.key.hi || vel < v.vel.lo || vel > v.vel.hi) continue;
         int k = note + v.transpose; const Zone* z = nullptr;
         for (auto& zz : v.zones) if (zz.ref && k >= zz.key.lo && k <= zz.key.hi && vel >= zz.vel.lo && vel <= zz.vel.hi) { z = &zz; break; }
@@ -322,6 +339,27 @@ void Engine::noteOn (int note, int vel) {
         int m = kbMode (&v);
         if (m) monoOn (note, vel, v, *z, m);
         else startNote (note, vel, v, *z, glideTime (&v, prev, note) > 0 ? prev : -1, false, -1);
+    }
+    playing = nullptr;
+}
+
+float Engine::layerLevel (int i) const {
+    if (i < 0 || i > 3 || ! patch.active) return 1;
+    bool anySolo = false; for (auto& l : patch.layers) if (l.on && l.solo && l.preset >= 0) anySolo = true;
+    const auto& l = patch.layers[i];
+    if (! l.on || (anySolo && ! l.solo) || l.volDb <= -48) return 0;
+    return std::pow (10.0f, l.volDb / 20.0f);
+}
+
+void Engine::setPatch (const Patch& p, bool reset) {
+    if (! reset) { patch = p; return; }   // a knob on a layer: playing notes follow its level, new notes everything
+    allNotesOff();
+    patch = p; monoGroups.clear(); lastSolo.clear();
+    // the controllers start where the first layer's preset puts them
+    if (patch.active && bank) for (auto& l : patch.layers) if (l.preset >= 0 && l.preset < (int) bank->presets.size()) {
+        auto& pr = bank->presets[(size_t) l.preset];
+        for (int k = 0; k < 16; ++k) ctrlVal[MIDI_AP[k]] = pr.hasIc ? pr.ic[(size_t) k] / 127.0f : 0.0f;
+        apChanged.store (0xffff); break;
     }
 }
 
@@ -476,6 +514,7 @@ void Engine::render (float* L, float* R, int n) {
             const Sample& s = *nv.s; const int nc = (int) nv.copies.size();
             double inc[8];
             for (int k = 0; k < nc; ++k) { float c = pitch + nv.copies[(size_t) k].det + (nv.copies[(size_t) k].drift >= 0 ? drift[nv.copies[(size_t) k].drift] * driftAmt : 0.0f); inc[k] = nv.baseRate * std::pow (2.0, c / 1200.0); }
+            if (nv.layer >= 0) nv.lyG += (layerLevel (nv.layer) - nv.lyG) * .35f;
             const float panFrom = nv.panNow; nv.panNow = pan;
             const bool loop = s.loop && s.loopEnd > s.loopStart; const double loopLen = loop ? (s.loopEnd + 1 - s.loopStart) : 0, loopEndP = s.loopEnd + 1;
             const bool st = s.channels == 2 && ! s.R.empty();
@@ -520,7 +559,7 @@ void Engine::render (float* L, float* R, int n) {
                     if (nv.stereoPath) { double yr = q.b0 * xr + q.b1 * q.x1[1] + q.b2 * q.x2[1] - q.a1 * q.y1[1] - q.a2 * q.y2[1]; q.x2[1] = q.x1[1]; q.x1[1] = xr; q.y2[1] = q.y1[1]; q.y1[1] = yr; xr = yr; }
                 }
                 // envelope, level, cord volume
-                float g = envLevel (nv) * nv.baseGain * vol;
+                float g = envLevel (nv) * nv.baseGain * vol * nv.lyG;
                 if (nv.stealFade >= 0) { g *= std::max (0.0f, nv.stealFade / .01f); nv.stealFade -= (float) dt; if (nv.stealFade <= 0) nv.ended = true; }
                 if (nv.envRel) { nv.relT += dt; if (nv.relT > nv.r1 + nv.r2 + .05) nv.ended = true; } else nv.envT += dt;
                 float p = panFrom + (pan - panFrom) * (float) (i + 1) / (float) m;

@@ -33,7 +33,15 @@ public:
 
     // ---- used by the editor (message thread) ----
     void loadBankAsync (const juce::File& exb, int presetAfterLoad = 0);
-    void selectPreset (int index) { pendingPreset.store (index); }
+    void selectPreset (int index) { patchPending = false; if (patchOn.exchange (false)) ++patchVer; pendingPreset.store (index); }
+    // patches: browser-format objects { name, layers: [ { src: { type, name, bank }, on, solo, volDb, pan, coarse, fine, key: { lo, hi }, vel: { lo, hi } } x4 ] }
+    void setPatch (const juce::var& patch, bool reset);   // plays it (reset = fresh start)
+    void leavePatch();                                     // back to the selected preset
+    juce::var currentPatch() const { return curPatch; }
+    bool patchPlaying() const { return patchOn.load(); }
+    juce::var patchLibrary();
+    void storePatchLibrary (const juce::var& list);
+    int patchVersion() const { return patchVer.load(); }
     // on-screen pitch and mod wheels
     void queueBend (int value14) { uiNotes.addMessageToQueue (juce::MidiMessage::pitchWheel (1, juce::jlimit (0, 16383, value14))); }
     void queueCC (int cc, int value) { uiNotes.addMessageToQueue (juce::MidiMessage::controllerEvent (1, juce::jlimit (0, 127, cc), juce::jlimit (0, 127, value))); }
@@ -70,6 +78,9 @@ private:
     std::unique_ptr<juce::PropertiesFile> props;
     int restorePreset = -1;
     std::array<std::atomic<float>, 16> restoreKnobs; std::atomic<bool> restoreKnobsPending { false };
+    juce::var curPatch; std::atomic<bool> patchOn { false }; std::atomic<int> patchVer { 0 };
+    juce::SpinLock patchLock; exw::Patch pendingPatch; std::atomic<bool> patchPending { false }; bool pendingPatchReset = false;
+    exw::Patch resolvePatch (const juce::var& p) const; bool restorePatchOn = false;
 
     void parameterChanged (const juce::String& id, float value) override;
     void pushSettings();

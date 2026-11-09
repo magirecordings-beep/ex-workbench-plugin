@@ -113,11 +113,49 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
 .key{position:relative;flex:1;background:linear-gradient(180deg,#cfd0d2 0%,#f7f7f5 8%,#fff 70%,#e2e2e0 100%);border:1px solid #1c1d20;border-radius:0 0 4px 4px;margin-right:-1px;cursor:pointer}
 .key.black{position:absolute;top:0;height:60%;background:linear-gradient(180deg,#050505,#1f2022 80%,#3a3b3e 92%,#111 100%);border-color:#000;z-index:2;border-radius:0 0 3px 3px}
 .key.on{background:linear-gradient(180deg,#5aa9ff,#2f7fe0)!important}
+
+/* pages (like the browser version's page buttons) */
+.right{grid-template-rows:86px 42px minmax(0,1fr)!important}
+.pages{display:flex;gap:4px;padding:4px;background:#141518;border:1px solid #45484e;border-radius:5px}
+.ptab{flex:1;display:grid;justify-items:center;gap:1px;padding:3px 6px;border-radius:4px;background:linear-gradient(180deg,#3b3e43,#25272b);border:1px solid #484b51;color:#e9ebee;font:700 13px var(--f-body);letter-spacing:.06em;text-transform:uppercase}
+.ptab small{font:400 10px var(--f-body);color:#9aa0a8;text-transform:none;letter-spacing:0}
+.ptab::before{content:"";width:18px;height:4px;border-radius:2px;background:#4a1512}
+.ptab[aria-selected=true]{background:linear-gradient(180deg,#45484d,#2c2e32);border-color:#7a7e85}
+.ptab[aria-selected=true]::before{background:var(--led);box-shadow:0 0 8px rgba(255,50,40,.9)}
+.page{display:grid;gap:8px;min-height:0;align-content:start}
+.page[hidden]{display:none}
+.voicepage{grid-template-rows:auto auto}
+/* library tabs */
+.ltabs{display:flex;gap:4px}
+.ltabs button{flex:1;padding:3px 6px;font-size:12px}
+.ltabs button[aria-pressed=true]{background:linear-gradient(180deg,#1f5bc4,#174aa3);border-color:#3a6fd0;color:#fff}
+.lfoot{display:flex;gap:5px;flex-wrap:wrap}
+.lfoot button{padding:3px 8px;font-size:11px}
+/* patch page */
+.pt-head{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pt-name{background:#121316;border:1px solid #3d4046;border-radius:4px;padding:5px 8px;min-width:260px;font-size:14px;user-select:text}
+.pt-state{font:11px var(--f-mono);color:var(--muted)}
+.layers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.lslot{display:grid;gap:6px;padding:8px 10px;border-radius:5px;background:#121316;border:1px solid #3d4046;cursor:pointer;min-height:84px;align-content:start}
+.lslot[aria-selected=true]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.lslot .top{display:flex;align-items:center;gap:6px}
+.lslot .top b{font:700 12px var(--f-mono);flex:1}
+.lslot .src{font-size:14px;color:#bcd9ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lslot .src.empty{color:var(--muted);font-style:italic}
+.lslot .sum{font:10px var(--f-mono);color:var(--muted)}
+.srcrow{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;position:relative}
+.combo{position:relative}
+.combo input{width:100%;background:linear-gradient(180deg,#0e2250,#081739);color:#79bbff;border:1px solid #2f4c86;border-radius:4px;padding:6px 9px;font-size:13px;user-select:text}
+.combo-list{position:absolute;z-index:20;left:0;right:0;top:calc(100% + 3px);max-height:300px;overflow:auto;background:#07122a;border:1px solid #2f4c86;border-radius:5px;box-shadow:0 10px 28px rgba(0,0,0,.6)}
+.combo-list button{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid #13244a;border-radius:0;color:#bcd9ff;padding:5px 10px}
+.combo-list button:hover,.combo-list button.hi{background:#163a7c;color:#fff}
+.toast{position:absolute;left:50%;bottom:170px;transform:translateX(-50%);background:#1b1c1f;border:1px solid #55585e;border-radius:6px;padding:8px 14px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
+.toast.show{opacity:1}
 </style>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><radialGradient id="kn-grad" cx="45%" cy="30%" r="80%"><stop offset="0" stop-color="#5b5d61"/><stop offset=".35" stop-color="#2a2b2e"/><stop offset=".8" stop-color="#0e0f10"/><stop offset="1" stop-color="#050505"/></radialGradient></defs></svg>
-<div class="app" id="app">
+<div class="app" id="app"><div class="toast" id="toast"></div>
   <header>
     <div class="brand"><h1>Xtreme Lab</h1><span>Emulator X Sound Workstation</span></div>
     <div class="xp"><div class="t"><small>Preset:</small><b id="xp-name">—</b></div><button type="button" id="prev" aria-label="Previous preset">◀</button><button type="button" id="next" aria-label="Next preset">▶</button></div>
@@ -127,9 +165,11 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
     <section class="panel" aria-label="Library">
       <div class="ph"><span class="led"></span><h2>Library</h2><span class="grow"></span><span class="sub" id="bankname">no bank</span></div>
       <div class="pb">
-        <input class="search" id="search" type="search" placeholder="Filter presets" aria-label="Filter presets">
+        <div class="ltabs"><button type="button" data-ltab="pre" aria-pressed="true">Presets</button><button type="button" data-ltab="pat" aria-pressed="false">My patches</button></div>
+        <input class="search" id="search" type="search" placeholder="Filter presets" aria-label="Filter">
         <div class="cats" id="cats"></div>
         <div class="list" id="list" role="listbox" aria-label="Presets"><div class="empty">Load an Emulator X bank (.exb). Its SamplePool is found next to it automatically.</div></div>
+        <div class="lfoot" id="lfoot" hidden><button type="button" id="pt-new2">+ New patch</button><button type="button" id="pt-import">Open .exwp…</button><button type="button" id="pt-export">Save all as .exwp…</button></div>
       </div>
     </section>
     <div class="right" id="right">
@@ -141,6 +181,18 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
           <div class="kcell" id="k-master"></div>
         </div>
       </div>
+      <div class="pages" role="tablist"><button type="button" class="ptab" role="tab" data-page="patch">Patch<small>layers · sources</small></button><button type="button" class="ptab" role="tab" data-page="voice">Voice<small>filter · performance · analog · controllers</small></button></div>
+      <div class="page" data-pg="patch" hidden>
+        <section class="card"><div class="ph"><span class="led"></span><h2>Patch</h2><input class="pt-name" id="pt-name" aria-label="Patch name" maxlength="40"><span class="pt-state" id="pt-state"></span><span class="grow"></span>
+            <button type="button" class="primary" id="pt-save">Save patch</button><button type="button" id="pt-new">New from preset</button><button type="button" id="pt-del">Delete</button><button type="button" id="pt-leave">Back to presets</button></div>
+          <div class="pb">
+            <div class="layers" id="layers"></div>
+            <div class="srcrow"><span>Layer source</span><div class="combo"><input id="ly-search" placeholder="Search presets…" autocomplete="off" aria-label="Layer preset"><div class="combo-list" id="ly-list" hidden></div></div></div>
+            <div class="kgrid c8" id="ly-knobs"></div>
+            <p class="note">Each layer plays one of the bank's presets. Volume and pan follow live; key and velocity ranges split or stack the layers. Patches are kept in Xtreme Lab's settings and with your project.</p>
+          </div></section>
+      </div>
+      <div class="page voicepage" data-pg="voice">
       <div class="mods">
         <section class="card"><div class="ph"><span class="led"></span><h2>Filter</h2><span class="sub">moves the preset's own filters</span></div>
           <div class="pb"><div class="kgrid" id="filt-knobs"></div><p class="note">Centre = as the preset. Cutoff shifts every voice's filter in octaves; Resonance adds or takes away.</p></div></section>
@@ -156,7 +208,7 @@ main{display:grid;grid-template-columns:280px minmax(0,1fr);grid-template-rows:m
       </div>
       <section class="card"><div class="ph"><span class="led"></span><h2>Controllers</h2><span class="sub" id="ctl-sub"></span><span class="grow"></span><button type="button" id="btn-defcc" title="Forget MIDI-learned knobs and use X3's default CC numbers">Default CCs</button></div>
         <div class="pb"><div class="kgrid c8" id="ctl"></div></div></section>
-      <div></div>
+      </div>
     </div>
     <div class="dock">
       <div class="wheels"><div class="wheel"><div class="wh" id="wh-pitch" role="slider" tabindex="0" aria-label="Pitch wheel"><i></i><b></b></div>Pitch</div><div class="wheel"><div class="wh" id="wh-mod" role="slider" tabindex="0" aria-label="Mod wheel"><i></i><b></b></div>Mod</div></div>
@@ -173,7 +225,7 @@ const send = o => { try { backend && backend.emitEvent('exw', o); } catch (e) {}
 const AP = 'ABCDEFGHIJKLMNOP', AP_CC = [21, 22, 23, 24, 25, 26, 27, 28, 70, 71, 72, 73, 91, 93, 82, 83];
 const KB = ['Poly', 'Multiple trigger', 'Melody (last)', 'Melody (low)', 'Melody (high)', 'Synth (last)', 'Synth (low)', 'Synth (high)', 'Fingered glide'];
 const CAT_NAMES = { syn: 'Synth', bas: 'Bass', led: 'Lead', pad: 'Pad', arp: 'Arp', bts: 'Beats', bpm: 'BPM', raw: 'Raw', edg: 'Edg', wal: 'Wal', air: 'Air', kit: 'Kits', nse: 'Noise', hit: 'Hits', sfx: 'SFX', vox: 'Vox', prc: 'Perc', bel: 'Bells', key: 'Keys' };
-const st = { presets: [], preset: -1, info: null, params: {}, apcc: AP_CC.slice(), favs: new Set(), knobs: Array(16).fill(0), cat: 'all', filter: '', learn: -1, bank: null };
+const st = { ltab: 'pre', page: 'voice', patch: null, patchOn: false, patches: [], layer: 0, presets: [], preset: -1, info: null, params: {}, apcc: AP_CC.slice(), favs: new Set(), knobs: Array(16).fill(0), cat: 'all', filter: '', learn: -1, bank: null };
 const catOf = n => (String(n).match(/^([a-z0-9]{2,4}):/i) || [, ''])[1].toLowerCase();
 
 /* ---------- knobs ---------- */
@@ -263,6 +315,15 @@ function renderCats() {
   $('#cats').innerHTML = st.presets.length ? b('all', 'All', st.presets.length) + b('fav', '★', st.presets.filter(n => st.favs.has(n)).length) + Object.keys(counts).sort((a, c) => counts[c] - counts[a]).map(k => b(k, CAT_NAMES[k] || k.toUpperCase(), counts[k])).join('') : '';
 }
 function renderList() {
+  document.querySelectorAll('[data-ltab]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ltab === st.ltab)));
+  $('#lfoot').hidden = st.ltab !== 'pat'; $('#cats').hidden = st.ltab === 'pat';
+  if (st.ltab === 'pat') {
+    const el = $('#list'), f = st.filter.toLowerCase(), cur = st.patchOn && st.patch ? st.patch.name : null;
+    const rs = st.patches.map((n, i) => [n, i]).filter(([n]) => String(n).toLowerCase().includes(f));
+    el.innerHTML = rs.map(([n, i]) => `<div class="row" role="option" tabindex="0" data-pat="${i}" aria-current="${n === cur}"><span></span><span class="pc">${String(i + 1).padStart(2, '0')}</span><span class="nm">${esc(n)}</span></div>`).join('')
+      || `<div class="empty">${st.patches.length ? 'Nothing matches.' : 'No saved patches yet. Pick a preset and press <b>+ New patch</b> to layer it with others.'}</div>`;
+    return;
+  }
   renderCats();
   const el = $('#list');
   if (!st.presets.length) { el.innerHTML = `<div class="empty">${st.bank ? 'No presets in this bank.' : 'Load an Emulator X bank (.exb). Its <b>SamplePool</b> is found next to it automatically.'}</div>`; return; }
@@ -270,18 +331,24 @@ function renderList() {
   el.innerHTML = rs.map(([n, i]) => `<div class="row" role="option" tabindex="0" data-i="${i}" aria-current="${i === st.preset}"><button type="button" class="fav" data-fav="${esc(n)}" aria-pressed="${st.favs.has(n)}" aria-label="Favourite">${st.favs.has(n) ? '★' : '☆'}</button><span class="pc">${pcOf(i)}</span><span class="nm">${esc(n)}</span></div>`).join('') || '<div class="empty">Nothing matches.</div>';
   el.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
 }
-$('#list').addEventListener('click', e => { const f = e.target.closest('[data-fav]'); if (f) { e.stopPropagation(); send({ type: 'fav', name: f.dataset.fav }); return; } const r = e.target.closest('[data-i]'); if (r) pick(+r.dataset.i); });
+$('#list').addEventListener('click', e => { const pr = e.target.closest('[data-pat]'); if (pr) { send({ type: 'patchLoad', index: +pr.dataset.pat }); setPage('patch'); return; } const f = e.target.closest('[data-fav]'); if (f) { e.stopPropagation(); send({ type: 'fav', name: f.dataset.fav }); return; } const r = e.target.closest('[data-i]'); if (r) pick(+r.dataset.i); });
 $('#list').addEventListener('keydown', e => { const r = e.target.closest('.row'); if (!r) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(+r.dataset.i); } if (e.key === 'ArrowDown') { e.preventDefault(); r.nextElementSibling?.focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); r.previousElementSibling?.focus(); } });
 $('#cats').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { st.cat = b.dataset.cat; renderList(); $('#list').scrollTop = 0; } });
 $('#search').addEventListener('input', e => { st.filter = e.target.value; renderList(); });
 const step = d => { const rs = rows(); if (!rs.length) return; const at = rs.findIndex(([, i]) => i === st.preset); pick(rs[(at < 0 ? (d > 0 ? 0 : rs.length - 1) : (at + d + rs.length) % rs.length)][1]); };
 $('#prev').addEventListener('click', () => step(-1)); $('#next').addEventListener('click', () => step(1));
-function pick(i) { st.preset = i; send({ type: 'preset', index: i }); renderList(); }
+function pick(i) { st.preset = i; if (st.patchOn) { st.patchOn = false; if (st.page === 'patch') setPage('voice'); } send({ type: 'preset', index: i }); renderList(); renderLcd(); }
 
 function renderLcd() {
   const info = st.info;
   $('#lcd1').textContent = info ? info.name : st.bank ? 'PICK A PRESET' : 'XTREME LAB';
-  $('#xp-name').textContent = info ? info.name : '—';
+  $('#xp-name').textContent = st.patchOn && st.patch ? st.patch.name : info ? info.name : '—';
+  if (st.patchOn && st.patch) {
+    $('#lcd1').textContent = st.patch.name;
+    const used = (st.patch.layers || []).filter(l => l && l.src && l.on !== false).length;
+    $('#lcd2').innerHTML = `<span><b>PATCH</b>USER</span><span><b>LAYERS</b>${used}/4</span><span><b>EDIT</b>LAYER ${st.layer + 1}</span>`;
+    return;
+  }
   if (!info) { $('#lcd2').innerHTML = `<span>${st.bank ? esc(st.bank) : 'LOAD A BANK TO START'}</span>`; return; }
   const parts = [['PROG', pcOf(info.index)], ['VOICES', info.voices], ['ZONES', info.zones], ['KEYS', info.kb ? KB[info.kb] : 'Poly']];
   if (info.glide > 0) parts.push(['GLIDE', Math.round(info.glide * 1000) + ' ms/oct']);
@@ -304,6 +371,91 @@ function renderLcd() {
   el.addEventListener('pointermove', e => { if (down === null) return; const k = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-n]'); if (k && +k.dataset.n !== down) { off(); on(+k.dataset.n); } });
   el.addEventListener('pointerup', off); el.addEventListener('pointercancel', off);
 })();
+
+
+/* ---------- pages ---------- */
+function setPage(pg) { st.page = pg; document.querySelectorAll('.ptab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.page === pg))); document.querySelectorAll('.page').forEach(p => p.hidden = p.dataset.pg !== pg); if (pg === 'patch') renderPatch(); }
+document.querySelector('.pages').addEventListener('click', e => { const b = e.target.closest('.ptab'); if (b) setPage(b.dataset.page); });
+document.querySelectorAll('[data-ltab]').forEach(b => b.addEventListener('click', () => { st.ltab = b.dataset.ltab; $('#search').placeholder = st.ltab === 'pat' ? 'Filter patches' : 'Filter presets'; renderList(); }));
+
+/* ---------- patches: up to four layers, each a preset with its own level, pan, tuning and ranges ---------- */
+const NOTE = n => ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][n % 12] + (Math.floor(n / 12) - 2);
+const newLayer = src => ({ src: src || null, on: true, solo: false, volDb: 0, pan: 0, coarse: 0, fine: 0, key: { lo: 0, hi: 127 }, vel: { lo: 1, hi: 127 } });
+const presetSrc = i => ({ type: 'preset', name: st.presets[i], bank: st.bank || '' });
+function patchFrom(i) { return { name: (i >= 0 && st.presets[i] ? st.presets[i].replace(/^[a-z0-9]{2,4}:/i, '') + ' stack' : 'New patch').slice(0, 40), layers: [newLayer(i >= 0 ? presetSrc(i) : null), newLayer(), newLayer(), newLayer()] }; }
+let patchDirty = false;
+function pushPatch(reset) { patchDirty = true; st.patchOn = true; send({ type: 'patch', patch: st.patch, reset: !!reset }); renderPatch(); renderLcd(); }
+const LY = {
+  volDb: ['Volume', -48, 6, .5, v => v <= -48 ? '−∞' : (v > 0 ? '+' : '') + v.toFixed(1) + ' dB', 0],
+  pan: ['Pan', -100, 100, 1, v => v === 0 ? 'C' : (v < 0 ? 'L' : 'R') + Math.abs(Math.round(v)), 0],
+  coarse: ['Coarse', -36, 36, 1, v => (v > 0 ? '+' : '') + v + ' st', 0],
+  fine: ['Fine', -100, 100, 1, v => (v > 0 ? '+' : '') + Math.round(v) + ' ct', 0],
+  keyLo: ['Key low', 0, 127, 1, NOTE, 0], keyHi: ['Key high', 0, 127, 1, NOTE, 127],
+  velLo: ['Vel low', 1, 127, 1, v => String(v), 1], velHi: ['Vel high', 1, 127, 1, v => String(v), 127]
+};
+const lyGet = (l, k) => k === 'keyLo' ? l.key.lo : k === 'keyHi' ? l.key.hi : k === 'velLo' ? l.vel.lo : k === 'velHi' ? l.vel.hi : l[k];
+const lySet = (l, k, v) => { if (k === 'keyLo') l.key.lo = Math.min(v, l.key.hi); else if (k === 'keyHi') l.key.hi = Math.max(v, l.key.lo); else if (k === 'velLo') l.vel.lo = Math.min(v, l.vel.hi); else if (k === 'velHi') l.vel.hi = Math.max(v, l.vel.lo); else l[k] = v; };
+const LK = {};
+for (const [k, [label, min, max, step, fmt, def]] of Object.entries(LY)) {
+  const cell = document.createElement('div'); cell.className = 'kcell'; $('#ly-knobs').appendChild(cell);
+  LK[k] = knob(cell, { label, min, max, step, value: def, def, fmt, onChange: v => { const l = st.patch?.layers[st.layer]; if (!l) return; lySet(l, k, v); pushPatch(false); } });
+}
+function renderPatch() {
+  const pt = st.patch;
+  $('#pt-state').textContent = pt ? (st.patchOn ? (patchDirty ? 'playing · not saved' : 'playing') : 'not playing') : '';
+  if (!pt) { $('#layers').innerHTML = '<div class="empty" style="grid-column:1/-1">No patch open. Pick a preset and press <b>New from preset</b>, or open one from <b>My patches</b>.</div>'; $('#pt-name').value = ''; return; }
+  if (document.activeElement !== $('#pt-name')) $('#pt-name').value = pt.name || '';
+  $('#layers').innerHTML = pt.layers.map((l, i) => {
+    const sum = l.src ? `${LY.volDb[4](l.volDb)} · ${NOTE(l.key.lo)}–${NOTE(l.key.hi)}${l.coarse ? ' · ' + LY.coarse[4](l.coarse) : ''}` : 'click, then choose a preset';
+    return `<div class="lslot" data-ly="${i}" aria-selected="${i === st.layer}"><div class="top"><b>L${i + 1}</b><button type="button" class="lbtn${l.on ? ' on' : ''}" data-on="${i}">ON</button><button type="button" class="lbtn${l.solo ? ' on' : ''}" data-solo="${i}">S</button></div>
+      <span class="src${l.src ? '' : ' empty'}">${esc(l.src ? l.src.name : 'Empty')}</span><span class="sum">${esc(sum)}</span></div>`;
+  }).join('');
+  const l = pt.layers[st.layer];
+  for (const k of Object.keys(LY)) LK[k].set(lyGet(l, k));
+  if (document.activeElement !== $('#ly-search')) $('#ly-search').value = l.src ? l.src.name : '';
+}
+$('#layers').addEventListener('click', e => {
+  const pt = st.patch; if (!pt) return;
+  const on = e.target.closest('[data-on]'), so = e.target.closest('[data-solo]'), slot = e.target.closest('[data-ly]');
+  if (on) { const l = pt.layers[+on.dataset.on]; l.on = !l.on; pushPatch(false); return; }
+  if (so) { const l = pt.layers[+so.dataset.solo]; l.solo = !l.solo; pushPatch(false); return; }
+  if (slot) { st.layer = +slot.dataset.ly; renderPatch(); renderLcd(); if (!pt.layers[st.layer].src) { $('#ly-search').focus(); } }
+});
+// layer source: type to search the bank's presets
+let comboHi = 0;
+function comboRender() {
+  const q = $('#ly-search').value.trim().toLowerCase(), box = $('#ly-list');
+  const cur = st.patch?.layers[st.layer]?.src?.name;
+  const rs = st.presets.map((n, i) => [n, i]).filter(([n]) => !q || n === cur || n.toLowerCase().includes(q)).slice(0, 300);
+  const list = q && cur && q === cur.toLowerCase() ? st.presets.map((n, i) => [n, i]) : rs;
+  box.innerHTML = [`<button type="button" data-pick="-1"><i>Empty (clear this layer)</i></button>`, ...list.map(([n, i], k) => `<button type="button" data-pick="${i}" class="${k === comboHi ? 'hi' : ''}">${esc(n)}</button>`)].join('');
+  box.hidden = false;
+}
+function pickSource(i) {
+  if (!st.patch) st.patch = patchFrom(-1);
+  const l = st.patch.layers[st.layer]; l.src = i >= 0 ? presetSrc(i) : null;
+  $('#ly-list').hidden = true; $('#ly-search').blur(); pushPatch(true);
+}
+$('#ly-search').addEventListener('focus', () => { comboHi = 0; $('#ly-search').select(); comboRender(); });
+$('#ly-search').addEventListener('input', () => { comboHi = 0; comboRender(); });
+$('#ly-search').addEventListener('keydown', e => {
+  const opts = [...$('#ly-list').querySelectorAll('[data-pick]:not([data-pick="-1"])')];
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); comboHi = Math.max(0, Math.min(opts.length - 1, comboHi + (e.key === 'ArrowDown' ? 1 : -1))); opts.forEach((o, k) => o.classList.toggle('hi', k === comboHi)); opts[comboHi]?.scrollIntoView({ block: 'nearest' }); }
+  if (e.key === 'Enter' && opts[comboHi]) { e.preventDefault(); pickSource(+opts[comboHi].dataset.pick); }
+  if (e.key === 'Escape') { $('#ly-list').hidden = true; $('#ly-search').blur(); }
+});
+$('#ly-list').addEventListener('pointerdown', e => { const b = e.target.closest('[data-pick]'); if (b) { e.preventDefault(); pickSource(+b.dataset.pick); } });
+$('#ly-search').addEventListener('blur', () => setTimeout(() => { $('#ly-list').hidden = true; renderPatch(); }, 120));
+$('#pt-name').addEventListener('input', e => { if (!st.patch) return; st.patch.name = e.target.value.slice(0, 40) || 'Patch'; patchDirty = true; renderLcd(); $('#pt-state').textContent = 'playing · not saved'; send({ type: 'patch', patch: st.patch, reset: false }); });
+const newPatch = () => { const i = st.preset >= 0 ? st.preset : -1; st.patch = patchFrom(i); st.layer = i >= 0 ? 1 : 0; pushPatch(true); setPage('patch'); toast(i >= 0 ? 'New patch: layer 1 is the current preset. Pick a preset for layer 2.' : 'New patch: pick a preset for layer 1.'); };
+$('#pt-new').addEventListener('click', newPatch); $('#pt-new2').addEventListener('click', newPatch);
+$('#pt-save').addEventListener('click', () => { if (!st.patch) return; send({ type: 'patchSave', patch: st.patch }); patchDirty = false; renderPatch(); toast(`Saved “${st.patch.name}” to My patches.`); });
+$('#pt-del').addEventListener('click', () => { const i = st.patch ? st.patches.indexOf(st.patch.name) : -1; if (i < 0) { toast('This patch isn’t saved yet.'); return; } send({ type: 'patchDelete', index: i }); toast(`Deleted “${st.patch.name}”.`); });
+$('#pt-leave').addEventListener('click', () => { send({ type: 'leavePatch' }); st.patchOn = false; setPage('voice'); renderLcd(); renderList(); });
+$('#pt-import').addEventListener('click', () => send({ type: 'patchImport' }));
+$('#pt-export').addEventListener('click', () => send({ type: 'patchExport' }));
+let toastT = 0; function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 3200); }
+setPage('voice');
 
 /* ---------- fixed faceplate scaled to the window ---------- */
 const fit = () => { const app = $('#app'), s = Math.min(innerWidth / 1600, innerHeight / 960); app.style.transform = `scale(${s})`; app.style.left = Math.max(0, (innerWidth - 1600 * s) / 2) + 'px'; app.style.top = Math.max(0, (innerHeight - 960 * s) / 2) + 'px'; };
@@ -333,11 +485,14 @@ function onMsg(m) {
     st.bank = m.bank || null; st.preset = m.preset; st.info = m.info || null; st.params = { ...st.params, ...(m.params || {}) }; st.apcc = m.apcc || st.apcc; st.favs = new Set(m.favs || []);
     st.learn = -1;
     if (m.knobs) st.knobs = m.knobs.slice();
+    if ('patches' in m) st.patches = m.patches || [];
+    if ('patchOn' in m) { const was = st.patchOn; st.patchOn = !!m.patchOn; if (m.patch && typeof m.patch === 'object') { st.patch = m.patch; if (!was && st.patchOn) patchDirty = !st.patches.includes(st.patch.name); } if (!st.patchOn && st.page === 'patch' && was) setPage('voice'); }
     $('#bankname').textContent = st.bank || 'no bank loaded';
     $('#btn-recent').hidden = !m.recent || m.recent === st.bank; $('#btn-recent').textContent = 'Reload ' + (m.recent || '');
     $('#status').textContent = m.missing ? `${m.missing} zones have no sample` : (m.loading ? m.status : '');
-    renderList(); renderLcd(); renderParams(); renderControllers();
-  } else if (m.type === 'status') {
+    renderList(); renderLcd(); renderParams(); renderControllers(); if (st.page === 'patch') renderPatch();
+  } else if (m.type === 'toast') toast(m.text);
+  else if (m.type === 'status') {
     $('#notes-bar').style.width = Math.min(100, m.notes / 40 * 100) + '%'; $('#notes-v').textContent = m.players > m.notes ? `${m.notes}·${m.players}` : String(m.notes);
     $('#prog').hidden = !m.loading; $('#prog-i').style.width = Math.round((m.progress || 0) * 100) + '%';
     if (m.loading) $('#status').textContent = m.status; else if (/^(Couldn|No |Found|Not an|Bank not)/.test(m.status || '')) $('#status').textContent = m.status;

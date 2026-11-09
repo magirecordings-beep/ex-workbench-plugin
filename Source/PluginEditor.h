@@ -16,7 +16,7 @@ private:
     juce::WebBrowserComponent web;
     std::unique_ptr<juce::FileChooser> chooser;
     bool ready = false;
-    int sentBankVer = -1, sentPreset = -2, sentLearn = -1;
+    int sentBankVer = -1, sentPreset = -2, sentLearn = -1, sentPatchVer = -1;
     float sentKnobs[16] {};
     std::map<juce::String, float> sentParams;
 

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <memory>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace exw {
@@ -33,12 +34,28 @@ struct Settings {
     Settings();
 };
 
+// a user patch: up to four layers, each one of the bank's presets with its own level, pan, tuning and ranges
+struct Layer {
+    int preset = -1;                       // index into the bank's presets (-1 = empty)
+    bool on = true, solo = false;
+    float volDb = 0, pan = 0;              // pan -100..100
+    int coarse = 0; float fine = 0;        // semitones, cents
+    int keyLo = 0, keyHi = 127, velLo = 1, velHi = 127;
+};
+struct Patch {
+    bool active = false;                   // false: play the selected preset on its own
+    std::string name;
+    Layer layers[4];
+};
+
 class Engine {
 public:
     explicit Engine (Settings& s);
     void prepare (double sampleRate);
     void setBank (std::shared_ptr<const Bank> bank);   // audio thread
     void setPreset (int index);                           // audio thread; resets controllers to the preset's starts
+    void setPatch (const Patch& p, bool reset);           // audio thread; reset = a new patch (notes stop), else a live edit
+    bool patchActive() const { return patch.active; }
     int presetIndex() const { return preset; }
 
     // MIDI (audio thread)
@@ -86,6 +103,7 @@ private:
         std::vector<Copy> copies; bool stereoPath = false;
         float panNow = 0;
         int kb = 0; int monoGroup = -1;
+        int layer = -1; float lyG = 1;   // patch layer (-1 none) and its level, following the layer's volume live
     };
     struct MonoGroup { const Voice* vd = nullptr; std::vector<std::pair<int, int>> held; int cur = -1; int m = 0; };
 
@@ -103,6 +121,11 @@ private:
     std::mt19937 rng { 12345 };
     float drift[8] {}, driftFrom[8] {}, driftTo[8] {}; double driftPh[8] {};
     float masterGain = .24f;
+    Patch patch;
+    // the layer a note is being started for (set around startNote)
+    const Preset* playing = nullptr; float lyGain = 1, lyPan = 0, lyCents = 0; int lyIdx = -1;
+    float layerLevel (int i) const;
+    void playPreset (const Preset& p, int note, int vel, int prev);
     MasterFx master;
 
     const Preset* cur() const;

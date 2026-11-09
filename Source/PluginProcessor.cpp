@@ -107,6 +107,8 @@ void ExwProcessor::loadBankAsync (const juce::File& exb, int presetAfterLoad) {
         progress = 1; loading = false; ++bankVer;
         juce::MessageManager::callAsync ([this, ok = b->error.empty(), exb] {
             if (ok) { userSettings().setValue ("recentBank", exb.getFullPathName()); updateHostDisplay (ChangeDetails().withProgramChanged (true)); }
+            // a project saved while a patch was playing: bring the patch back now its presets exist
+            if (ok && restorePatchOn && curPatch.isObject()) { restorePatchOn = false; setPatch (curPatch, true); }
         });
     });
 }
@@ -143,6 +145,10 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         // a project being reopened: put the knobs back where they were saved
         if (restoreKnobsPending.exchange (false)) for (int i = 0; i < 16; ++i) if (restoreKnobs[(size_t) i].load() >= 0) engine.setApKnob (i, restoreKnobs[(size_t) i].load());
     }
+    if (patchPending.load()) {
+        const juce::SpinLock::ScopedTryLockType l (patchLock);
+        if (l.isLocked()) { engine.setPatch (pendingPatch, pendingPatchReset); pendingPatchReset = false; patchPending = false; }
+    }
     // host automation of the A-P knobs (only when the host actually moved one)
     for (int i = 0; i < 16; ++i) {
         float pv = params.getRawParameterValue (knobId (i))->load();
@@ -167,6 +173,7 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     midi.clear();
     for (int i = 0; i < 16; ++i) knobVals[(size_t) i] = engine.apKnob (i);
     notes = engine.activeNotes(); players = engine.activePlayers();
+    if (! patchPending.load() && patchOn.load() && ! engine.patchActive()) { patchOn = false; ++patchVer; } // a program change left the patch
 }
 
 void ExwProcessor::getStateInformation (juce::MemoryBlock& dest) {
@@ -178,6 +185,8 @@ void ExwProcessor::getStateInformation (juce::MemoryBlock& dest) {
     extra.setProperty ("apcc", cc, nullptr);
     juce::String knobs; for (int i = 0; i < 16; ++i) knobs << juce::String (knobVals[(size_t) i].load(), 4) << (i < 15 ? "," : "");
     extra.setProperty ("knobs", knobs, nullptr);
+    extra.setProperty ("patch", curPatch.isObject() ? juce::JSON::toString (curPatch, true) : juce::String(), nullptr);
+    extra.setProperty ("patchOn", patchOn.load(), nullptr);
     state.removeChild (state.getChildWithName ("EXWSTATE"), nullptr);
     state.appendChild (extra, nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
@@ -197,9 +206,56 @@ void ExwProcessor::setStateInformation (const void* data, int size) {
         auto kv = juce::StringArray::fromTokens (extra["knobs"].toString(), ",", "");
         for (int i = 0; i < 16; ++i) restoreKnobs[(size_t) i] = i < kv.size() ? kv[i].getFloatValue() : -1.0f;
         restoreKnobsPending = kv.size() == 16;
+        auto pj = juce::JSON::parse (extra["patch"].toString());
+        if (pj.isObject()) { curPatch = pj; restorePatchOn = (bool) extra["patchOn"]; }
         if (f.existsAsFile()) loadBankAsync (f, juce::jmax (0, preset));
         else if (extra["bank"].toString().isNotEmpty()) { const juce::SpinLock::ScopedLockType l (bankLock); status = "Bank not found: " + extra["bank"].toString(); lastBankFile = f; }
     }
+}
+
+// ---------- patches ----------
+exw::Patch ExwProcessor::resolvePatch (const juce::var& p) const {
+    exw::Patch out; out.active = true; out.name = p["name"].toString().toStdString();
+    auto b = currentBank();
+    auto* layers = p["layers"].getArray();
+    for (int i = 0; i < 4; ++i) {
+        auto& L = out.layers[i];
+        juce::var l = layers && i < layers->size() ? (*layers)[i] : juce::var();
+        if (! l.isObject()) { L.preset = -1; continue; }
+        auto src = l["src"];
+        L.preset = -1;
+        if (b && src.isObject() && src["type"].toString() == "preset") {
+            auto nm = src["name"].toString().toStdString(), bk = src["bank"].toString().toStdString();
+            int any = -1;
+            for (size_t k = 0; k < b->presets.size(); ++k) if (b->presets[k].name == nm) { if (any < 0) any = (int) k; if (bk.empty() || bk == b->name) { L.preset = (int) k; break; } }
+            if (L.preset < 0) L.preset = any;
+        }
+        auto num = [&] (const juce::var& v, double d) { return v.isVoid() || v.isUndefined() ? d : (double) v; };
+        L.on = (bool) num (l["on"], 1); L.solo = (bool) num (l["solo"], 0);
+        L.volDb = (float) num (l["volDb"], 0); L.pan = (float) num (l["pan"], 0);
+        L.coarse = (int) num (l["coarse"], 0); L.fine = (float) num (l["fine"], 0);
+        L.keyLo = (int) num (l["key"]["lo"], 0); L.keyHi = (int) num (l["key"]["hi"], 127);
+        L.velLo = (int) num (l["vel"]["lo"], 1); L.velHi = (int) num (l["vel"]["hi"], 127);
+    }
+    return out;
+}
+
+void ExwProcessor::setPatch (const juce::var& patch, bool reset) {
+    curPatch = patch; patchOn = true; ++patchVer;
+    auto r = resolvePatch (patch);
+    const juce::SpinLock::ScopedLockType l (patchLock);
+    pendingPatch = r; pendingPatchReset = reset || pendingPatchReset; patchPending = true;
+}
+
+void ExwProcessor::leavePatch() { patchOn = false; ++patchVer; pendingPreset.store (engine.presetIndex() < 0 ? 0 : engine.presetIndex()); }
+
+juce::var ExwProcessor::patchLibrary() {
+    auto v = juce::JSON::parse (userSettings().getValue ("patches"));
+    return v.isArray() ? v : juce::var (juce::Array<juce::var>());
+}
+
+void ExwProcessor::storePatchLibrary (const juce::var& list) {
+    userSettings().setValue ("patches", juce::JSON::toString (list, true)); userSettings().saveIfNeeded(); ++patchVer;
 }
 
 juce::AudioProcessorEditor* ExwProcessor::createEditor() { return new ExwEditor (*this); }

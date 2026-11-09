@@ -23,6 +23,18 @@ int main (int argc, char** argv) {
     struct T { const char* preset; std::vector<int> notes; int vel; double secs; const char* setup; };
     std::vector<T> tests = { { "raw:Basic Saw", { 48 }, 110, 2.0, "" }, { "syn:ORiON", { 48, 55, 60, 64 }, 100, 3.0, "" }, { "bas:FATSO mono", { 36, 43 }, 110, 2.0, "" },
                              { "led:Wet", { 60 }, 100, 2.0, "" }, { "syn:ORiON", { 48, 55, 60, 64 }, 100, 3.0, "dark" }, { "raw:Basic Saw", { 48 }, 110, 2.0, "dark" } };
+    { // a two-layer patch: Basic Saw + Strings Box an octave up, the strings split to the upper keys
+        Patch pt; pt.active = true; pt.layers[0].preset = find ("raw:Basic Saw"); pt.layers[1].preset = find ("pad:Strings Box"); pt.layers[1].coarse = 12; pt.layers[1].keyLo = 60;
+        eng.setPatch (pt, true);
+        std::vector<float> a (4800), b (4800);
+        eng.noteOn (48, 100); eng.render (a.data(), b.data(), 4800); int low = eng.activePlayers();
+        eng.noteOn (64, 100); eng.render (a.data(), b.data(), 4800); int both = eng.activePlayers();
+        pt.layers[0].volDb = -48; eng.setPatch (pt, false); for (int k = 0; k < 4; ++k) eng.render (a.data(), b.data(), 4800);
+        double e = 0; for (float x : a) e += x * x;
+        printf ("patch: players after low note %d, after high note %d (layer 2 only above C3), rms with layer 1 muted %.4f\n", low, both, std::sqrt (e / a.size()));
+        eng.allNotesOff(); for (int k = 0; k < 20; ++k) eng.render (a.data(), b.data(), 4800);
+        eng.setPreset (0);
+    }
     for (auto& t : tests) {
         int idx = find (t.preset); if (idx < 0) { printf ("missing %s\n", t.preset); continue; }
         set.cutShiftOct = std::string (t.setup) == "dark" ? -4.0f : 0.0f;
