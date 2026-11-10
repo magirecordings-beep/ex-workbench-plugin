@@ -12,7 +12,6 @@ constexpr int MIDI_AP[16] = { 20, 21, 32, 33, 34, 35, 36, 37, 40, 41, 42, 43, 44
 constexpr int AP_DEFAULT_CC[16] = { 21, 22, 23, 24, 25, 26, 27, 28, 70, 71, 72, 73, 91, 93, 82, 83 };
 enum { DST_FINE = 47, DST_PITCH = 48, DST_FILT = 56, DST_Q = 57, DST_VOL = 64, DST_PAN = 65 };
 enum { K_ENV, K_LFO, K_CTRL };
-enum { F_BYPASS, F_LP2, F_LP4, F_LP6, F_HP2, F_HP4, F_BP, F_NOTCH, F_EQ, F_PHASER, F_FLANGER, F_MORPH = 100 };
 
 float dstScale (int d) {
     switch (d) { case DST_PITCH: return 3600; case DST_FINE: return 100; case DST_FILT: return 10140; case DST_Q: return 100; case DST_VOL: return 72; case DST_PAN: return 1; default: return 0; }
@@ -60,19 +59,16 @@ Engine::Engine (Settings& s) : set (s) {
 
 void Engine::prepare (double rate) { sr = rate > 0 ? rate : 44100; master.prepare (sr); allNotesOff(); }
 
-const Preset* Engine::cur() const { return bank && preset >= 0 && preset < (int) bank->presets.size() ? &bank->presets[(size_t) preset] : nullptr; }
 
 // E-MU envelope rate (stored 0..1) to seconds
-float Engine::rateSec (float x) const { x = std::max (0.0f, std::min (1.0f, x)); return 163.69f * (std::pow (2.0f, 11.0f * x) - 1.0f) / 2047.0f * set.envTime.load(); }
+float Engine::rateSec (float x) const { x = std::max (0.0f, std::min (1.0f, x)); return 163.69f * (std::pow (2.0f, 11.0f * x) - 1.0f) / 2047.0f * (prog ? prog->envscale : 1.0f); }
 
-void Engine::setBank (std::shared_ptr<const Bank> b) { allNotesOff(); for (auto& v : voices) v.active = false; bank = std::move (b); preset = -1; if (bank && ! bank->presets.empty()) setPreset (0); }
+void Engine::setBank (std::shared_ptr<const Bank> b) { allNotesOff(); for (auto& v : voices) v.active = false; monoGroups.clear(); lastSolo.clear(); prog = nullptr; bank = std::move (b); }
 
-void Engine::setPreset (int i) {
-    if (! bank || i < 0 || i >= (int) bank->presets.size()) return;
-    preset = i; patch.active = false; monoGroups.clear(); lastSolo.clear();
-    auto& p = bank->presets[(size_t) i];
-    for (int k = 0; k < 16; ++k) ctrlVal[MIDI_AP[k]] = p.hasIc ? p.ic[(size_t) k] / 127.0f : 0.0f;
-    apChanged.store (0xffff);
+void Engine::setProgram (const Program* p, bool reset, const uint8_t* ic) {
+    if (reset) { allNotesOff(); monoGroups.clear(); lastSolo.clear(); }
+    prog = p;
+    if (ic) { for (int k = 0; k < 16; ++k) ctrlVal[MIDI_AP[k]] = ic[k] / 127.0f; apChanged.store (0xffff); }
 }
 
 void Engine::setApKnob (int i, float v) { if (i >= 0 && i < 16) ctrlVal[MIDI_AP[i]] = std::max (0.0f, std::min (1.0f, v)); }
@@ -114,7 +110,7 @@ void Engine::planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fi
         float sv = staticSource (c.src, note, vel);
         if (! std::isnan (sv)) amt[tgt] += c.amt * sv; else if (isCtrlSrc (c.src)) live[tgt].push_back ({ c.src, c.amt });
     }
-    bool own = set.bendOwn.load();
+    bool own = prog ? prog->bendp : true;
     for (size_t i = 0; i < nC; ++i) {
         const auto& c = cords[i]; float sc = dstScale (c.dst); int slot = dstSlot (c.dst);
         if (slot < 0) continue;
@@ -142,12 +138,13 @@ void Engine::planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fi
     }
 }
 
-void Engine::computeStages (NoteVoice& nv, int code, float freq, float res100) {
-    int morph = -1; int t = emuFilterType (code, morph);
-    float fr = std::max (0.0f, std::min (1.0f, freq / 100.0f)), res = res100 / 100.0f, hz = 40.0f * std::pow (500.0f, fr);
-    int n = 0; auto add = [&] (int ty, float f, float g, float q) { if (n < 6) nv.stages[n++] = { ty, f, g, q }; };
+// the stage settings for a filter spec {type, freq 0-100, res 0-100}, shifted by `mod` (filter envelope, -1..1);
+// always six stages, the unused ones flat (as the browser version's filterStages)
+void Engine::filterStages (const FiltSpec& sp, float mod, StageSpec out[6], int& used) const {
+    const int t = sp.type; const int morph = sp.morph;
+    float fr = std::max (0.0f, std::min (1.0f, sp.freq / 100.0f + mod)), res = sp.res / 100.0f, hz = 40.0f * std::pow (500.0f, fr);
+    int n = 0; auto add = [&] (int ty, float f, float g, float q) { if (n < 6) out[n++] = { ty, f, g, q }; };
     switch (t) {
-        case F_BYPASS: break;
         case F_LP2: case F_LP4: case F_LP6: case F_HP2: case F_HP4: {
             int cnt = t == F_LP2 || t == F_HP2 ? 1 : t == F_LP6 ? 3 : 2; bool lp = t == F_LP2 || t == F_LP4 || t == F_LP6;
             for (int i = 0; i < cnt; ++i) add (lp ? ST_LP : ST_HP, clampF (lp ? hz : hz / 2), 0, i ? -3.0f : -3.0f + res * 24.0f);
@@ -158,7 +155,7 @@ void Engine::computeStages (NoteVoice& nv, int code, float freq, float res100) {
         case F_PHASER: for (float k : { 1.0f, 1.7f, 2.9f, 4.6f }) add (ST_NO, clampF (hz * k / 2), 0, 1.5f + res * 6); break;
         case F_FLANGER: for (int k = 1; k <= 6; ++k) add (ST_NO, clampF (hz / 4 * (float) k), 0, 6 + res * 10); break;
         case F_MORPH: {
-            const auto& M = MORPHS[morph < 0 ? 0 : morph];
+            const auto& M = MORPHS[morph < 0 || morph >= NUM_MORPHS ? 0 : morph];
             for (int i = 0; i < 6; ++i) {
                 const auto& a = M.A[i]; const auto& b = M.B[i];
                 float f = clampF (std::exp (lerpf (std::log (a.f), std::log (b.f), fr)));
@@ -169,8 +166,64 @@ void Engine::computeStages (NoteVoice& nv, int code, float freq, float res100) {
                 add (a.t, f, g, q);
             }
             break; }
+        default: break;
     }
-    nv.nStages = n;
+    used = t == F_MORPH ? 6 : n;
+    while (n < 6) out[n++] = { ST_PK, 1000, 0, 1 };
+}
+
+namespace {
+FiltSpec presetSpec (const Voice& v) {
+    FiltSpec s; int morph; s.type = emuFilterType (v.ftype, morph); s.morph = morph;
+    s.freq = std::round (v.ffreq * 100); s.res = std::round (v.fq * 100); s.env = 0; s.decay = .8f; return s;
+}
+}
+
+// which filter a voice plays (the browser's specFor): a layer's own, the preset's (with the panel's shift), or the panel's
+bool Engine::baseSpec (const NoteVoice& nv, FiltSpec& out) const {
+    const Slot* sl = slotOf (nv); const Voice* vd = nv.vd;
+    const bool vf = vd && vd->hasFilter && sl && sl->isPreset;
+    if (sl && sl->layer) {
+        if (! sl->filtFromPreset) out = sl->filt;
+        else if (vf) out = presetSpec (*vd);
+        else { out = FiltSpec(); out.type = F_BYPASS; }
+    } else if (vf && prog && prog->usePreset) {
+        out = presetSpec (*vd);
+        if (out.type != F_BYPASS) {
+            auto c = [] (float v, float lo, float hi) { return std::max (lo, std::min (hi, v)); };
+            if (out.type == F_MORPH) out.freq = c (out.freq + prog->ofsFreq, 0, 100);
+            out.res = c (out.res + prog->ofsRes, 0, 100); out.env = prog->ofsEnv; out.decay = prog->ofsDecay;
+        }
+    } else if (prog) out = prog->filt;
+    else return false;
+    if (out.type != F_BYPASS && nv.filtQ != 0) out.res = std::max (0.0f, std::min (100.0f, out.res + nv.filtQ));
+    return true;
+}
+
+// start: the note's filter (jumping to freq + env amount and gliding back over the decay); else a live change
+void Engine::voiceFilter (NoteVoice& nv, bool start) {
+    FiltSpec sp; if (! baseSpec (nv, sp)) { if (start) nv.nStages = 0; return; }
+    const Slot* sl = slotOf (nv);
+    nv.presetCents = (! (sl && sl->layer) && nv.vd && nv.vd->hasFilter && sl && sl->isPreset && prog && prog->usePreset && sp.type != F_MORPH) ? prog->ofsFreq * 1200.0f * std::log2 (500.0f) / 100.0f : 0.0f;
+    int used = 0;
+    if (start) {
+        StageSpec base[6]; filterStages (sp, 0, base, used);
+        nv.nStages = used; if (! used) return;
+        const float env = sp.env / 100.0f;
+        if (env != 0) {
+            int u2; filterStages (sp, env, nv.stages, u2);
+            for (int i = 0; i < 6; ++i) { nv.stFrom[i] = nv.stages[i]; nv.stTo[i] = base[i]; }
+            nv.gliding = true; nv.glideExp = true; nv.stK = 0; nv.stDelay = (int) std::lround (.004 * sr); nv.stTc = std::max (.01f, sp.decay / 3);
+        } else { for (int i = 0; i < 6; ++i) nv.stages[i] = base[i]; nv.gliding = false; }
+        return;
+    }
+    if (! nv.nStages) return;
+    if (sp.type == F_BYPASS) { sp.freq = 70; sp.res = 0; }
+    StageSpec to[6]; filterStages (sp, 0, to, used);
+    bool same = true; for (int i = 0; i < nv.nStages; ++i) { const auto& a = nv.gliding ? nv.stTo[i] : nv.stages[i]; if (a.t != to[i].t || a.f != to[i].f || a.g != to[i].g || a.q != to[i].q) same = false; }
+    if (same) return;
+    for (int i = 0; i < 6; ++i) { nv.stFrom[i] = nv.stages[i]; nv.stTo[i] = to[i]; }
+    nv.gliding = true; nv.glideExp = false; nv.stK = 0; nv.stDelay = 0; nv.stKStep = 16.0 / (.05 * sr);
 }
 
 // Web Audio's BiquadFilterNode formulas (lowpass/highpass Q in dB), so filters match the browser version
@@ -214,35 +267,38 @@ void Engine::stealIfNeeded() {
 
 void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int glideFrom, bool solo, int group) {
     const Sample* s = z.ref; if (! s || s->frames < 2) return;
+    const Slot* sl = prog && slotIdx >= 0 && slotIdx < prog->nSlots ? &prog->slots[slotIdx] : nullptr;
     // a free slot, or the quietest/oldest one
     NoteVoice* nvp = nullptr;
     for (auto& x : voices) if (! x.active) { nvp = &x; break; }
     if (! nvp) { for (auto& x : voices) if (! nvp || (x.releasing && ! nvp->releasing) || (x.releasing == nvp->releasing && x.age < nvp->age)) nvp = &x; }
     NoteVoice& nv = *nvp;
     nv = NoteVoice();
-    nv.active = true; nv.note = note; nv.startNote = note; nv.vel = vel; nv.age = ++ageCounter; nv.s = s; nv.vd = &v; nv.pre = playing ? playing : cur(); nv.monoGroup = group;
-    float semis = (float) (note + v.transpose - z.root + v.coarse) + (v.fine + z.fine + set.tuneCents.load() + lyCents) / 100.0f;
+    nv.active = true; nv.note = note; nv.startNote = note; nv.vel = vel; nv.age = ++ageCounter; nv.s = s; nv.vd = &v; nv.pre = sl ? sl->preset : nullptr; nv.monoGroup = group;
+    nv.slot = slotIdx; nv.layer = sl && sl->layer; nv.pv = sl && sl->isPreset && (! prog || prog->pmod);
+    nv.liveCents0 = sl ? slotCents (*sl) : 0.0f;
+    float semis = (float) (note + v.transpose - z.root + v.coarse) + (v.fine + z.fine + nv.liveCents0) / 100.0f;
     nv.baseRate = std::pow (2.0, semis / 12.0) * s->rate / sr;
-    nv.layer = lyIdx; nv.lyG = lyGain;
+    nv.lyG = nv.layer ? slotLevel (slotIdx) : 1.0f;
     for (int k = 0; k < 3; ++k) { nv.ulfoPh[k] = 0; nv.ulfoHold[k][0] = 0; nv.ulfoHold[k][1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); nv.fg[k] = FgRun(); }
-    nv.baseGain = std::pow (10.0f, v.volDb / 20.0f); nv.basePan = std::max (-1.0f, std::min (1.0f, v.pan / 64.0f + lyPan));
-    float fixed[8]; planMod (nv, v, note, vel, fixed);
+    nv.baseGain = std::pow (10.0f, v.volDb / 20.0f); nv.basePan = std::max (-1.0f, std::min (1.0f, v.pan / 64.0f));
+    float fixed[8] {};
+    if (nv.pv) planMod (nv, v, note, vel, fixed);
     nv.fixedPitch = fixed[0] + fixed[1]; nv.fixedFilt = fixed[2]; nv.cordPan = fixed[5];
-    nv.amp = std::pow (10.0f, fixed[4] / 20.0f);
-    // amp envelope
+    nv.filtQ = fixed[3];
+    // presets bring their own velocity response through their cords; everything else uses the Velocity knob
+    const float vs = prog ? prog->velsens : .7f;
+    nv.amp = nv.pv ? std::pow (10.0f, fixed[4] / 20.0f) : (1 - vs) + vs * (vel / 127.0f);
+    // amp envelope: the preset's own, a layer's own, or the Amp envelope card's
     float es[6], el[6];
-    if (! v.envs.empty()) for (int i = 0; i < 6; ++i) { es[i] = rateSec (v.envs[0].t[i]); el[i] = v.envs[0].l[i]; }
-    else { const float ds[6] = { .002f, 0, .6f, 0, .35f, 0 }, dl[6] = { 100, 100, 100, 100, 0, 0 }; for (int i = 0; i < 6; ++i) { es[i] = ds[i]; el[i] = dl[i]; } }
-    if (set.envMode.load() == 1) { // the Envelope panel's own ADSR replaces the preset's amp envelope
-        const float S = std::max (0.0f, std::min (100.0f, set.envS.load()));
-        const float ds[6] = { set.envA.load(), 0, set.envD.load(), 0, set.envR.load(), 0 }, dl[6] = { 100, 100, S, S, 0, 0 };
-        for (int i = 0; i < 6; ++i) { es[i] = ds[i]; el[i] = dl[i]; }
-        const float vs = set.envVel.load(); nv.amp *= (1 - vs) + vs * (vel / 127.0f);
-    }
+    const bool own = sl && sl->isPreset && ! v.envs.empty();
+    const bool useOwn = own && (sl->layer ? sl->useSrcEnv : (! prog || prog->envFromPreset));
+    if (useOwn) for (int i = 0; i < 6; ++i) { es[i] = rateSec (v.envs[0].t[i]); el[i] = v.envs[0].l[i]; }
+    else { EnvSpec d; const EnvSpec& e = sl && sl->layer ? sl->env : prog ? prog->env : d; for (int i = 0; i < 6; ++i) { es[i] = e.s[i]; el[i] = e.l[i]; } }
     float tt = 0; nv.envPts[0][0] = 0; nv.envPts[0][1] = 0;
     for (int i = 0; i < 4; ++i) { tt += std::max (i ? 0.0f : .003f, es[i]); nv.envPts[i + 1][0] = tt; nv.envPts[i + 1][1] = nv.amp * std::max (0.0f, el[i]) / 100.0f; }
     nv.r1 = std::max (.008f, es[4]); nv.r2 = std::max (.008f, es[5]); nv.relL1 = nv.amp * std::max (0.0f, el[4]) / 100.0f;
-    // modulation envelopes and LFOs
+    // modulation envelopes and LFOs of the preset
     for (int w = 0; w < 3; ++w) if (nv.menvUsed[w] && (size_t) w < v.envs.size()) {
         auto& me = nv.menv[w]; const auto& e = v.envs[(size_t) w]; float t2 = 0; me.n = 0; me.pts[0][0] = 0; me.pts[0][1] = 0;
         for (int i = 0; i < 4; ++i) { t2 += std::max (i ? 0.0f : .002f, rateSec (e.t[i])); me.pts[i + 1][0] = t2; me.pts[i + 1][1] = clamp1 (e.l[i] / 100.0f); }
@@ -251,48 +307,36 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     for (int w = 0; w < 2; ++w) if (nv.lfoUsed[w] && (size_t) w < v.plfos.size()) {
         const auto& L = v.plfos[(size_t) w]; nv.lfo[w].rate = L.rate; nv.lfo[w].shape = L.shape == 16 ? 1 : 0; nv.lfo[w].delay = L.delay > 0 ? rateSec (L.delay) : 0;
     } else nv.lfoUsed[w] = false;
-    // filter (resonance takes its cords once, at the start)
-    if (v.hasFilter) {
-        float res = std::round (v.fq * 100);
-        int morph; if (emuFilterType (v.ftype, morph) != F_BYPASS && fixed[3] != 0) res = std::max (0.0f, std::min (100.0f, res + fixed[3]));
-        { int mo; if (emuFilterType (v.ftype, mo) != F_BYPASS) res = std::max (0.0f, std::min (100.0f, res + set.resShift.load())); }
-        computeStages (nv, v.ftype, std::round (v.ffreq * 100), res);
-    }
+    // filter
+    voiceFilter (nv, true);
     nv.filtMod = false; for (auto& r : nv.routes) if (r.dst == DST_FILT) nv.filtMod = true;
-    nv.shiftNow = set.cutShiftOct.load() * 1200.0f;
-    for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], nv.fixedFilt + nv.shiftNow);
-    nv.lastFiltCents = nv.fixedFilt + nv.shiftNow;
-    nv.panNow = std::max (-1.0f, std::min (1.0f, nv.basePan + nv.cordPan));
-    // bend
-    nv.ownBend = set.bendOwn.load() && v.bendUp >= 0;
-    nv.bendCents = nv.ownBend ? v.bendUp * 100.0f : set.bendRange.load() * 100.0f;
+    for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], nv.fixedFilt + nv.presetCents);
+    nv.lastFiltCents = nv.fixedFilt + nv.presetCents;
+    nv.progVer = prog ? prog->version : -1;
+    nv.liveCents = nv.liveCents0; nv.lyGT = nv.lyG;
+    // the panel's live values
+    if (nv.layer && sl) { nv.sa = sl->sendA / 100.0f; nv.sb = sl->sendB / 100.0f; nv.lyPan = sl->pan / 100.0f; }
+    else if (fx) { nv.sa = fx->sendLevel (0); nv.sb = fx->sendLevel (1); }
+    const LfoSpec* lf = lfosFor (nv); const FgDef* fg = fgsFor (nv);
+    for (int k = 0; k < 3; ++k) { nv.ulfo[k] = lf ? lf[k] : LfoSpec(); nv.ufg[k] = fg ? fg[k] : FgDef(); }
+    nv.panNow = std::max (-1.0f, std::min (1.0f, nv.basePan + nv.cordPan + nv.lyPan));
+    // bend: a preset voice bends by its own range when Setup says so
+    nv.ownBend = nv.pv && (! prog || prog->bendp) && v.bendUp >= 0;
+    nv.bendCents = nv.ownBend ? v.bendUp * 100.0f : (prog ? prog->bend : 2.0f) * 100.0f;
     // glide: a cents offset sliding to 0
     float gt = glideFrom >= 0 ? glideTime (&v, glideFrom, note) : 0;
     nv.glideFrom = gt > 0 ? (glideFrom - note) * 100.0 : 0; nv.glideTo = 0; nv.glideT = 0; nv.glideDur = gt;
     (void) solo;
-    // unison copies
-    int n = 1; // unison isn't part of Xtreme Lab
-    nv.copies.assign ((size_t) n, Copy());
-    if (n > 1) {
-        float det = set.uniDetune.load(), spread = set.uniSpread.load() / 100.0f, ow = set.uniBlend.load() / 100.0f;
-        int centre = 0; std::vector<float> pos ((size_t) n);
-        for (int k = 0; k < n; ++k) { pos[(size_t) k] = (float) k / (float) (n - 1) * 2 - 1; if (std::fabs (pos[(size_t) k]) < std::fabs (pos[(size_t) centre])) centre = k; }
-        float norm = 1.0f / std::sqrt (1.0f + (float) (n - 1) * ow * ow);
-        bool shortAttack = s->loop && s->loopEnd > s->loopStart && (double) s->loopStart / s->rate < .03;
-        for (int k = 0; k < n; ++k) {
-            auto& c = nv.copies[(size_t) k]; bool outer = k != centre;
-            c.det = pos[(size_t) k] * det;
-            float pan = (k % 2 ? -1.0f : 1.0f) * std::fabs (pos[(size_t) k]) * spread;
-            float x = (pan + 1) / 2, g = (outer ? ow : 1.0f) * norm;
-            c.gl = (float) std::cos (x * PI / 2) * g; c.gr = (float) std::sin (x * PI / 2) * g;
-            c.drift = outer && set.uniDrift.load() > 0 ? k % 8 : -1;
-            if (shortAttack && outer) c.pos = s->loopStart + std::uniform_real_distribution<> (0, 1) (rng) * (s->loopEnd + 1 - s->loopStart);
-        }
-    }
-    nv.stereoPath = n > 1 || s->channels == 2;
+    nv.copies.assign (1, Copy());
+    nv.loop = s->loop && s->loopEnd > s->loopStart && (! prog || prog->loop);
+    nv.saT = nv.sa; nv.sbT = nv.sb;
+    nv.stereoPath = s->channels == 2;
     nv.kb = kbMode (&v);
     stealIfNeeded();
 }
+
+const LfoSpec* Engine::lfosFor (const NoteVoice& nv) const { const Slot* sl = slotOf (nv); if (sl && sl->layer) return sl->lfo; return prog ? prog->lfo : nullptr; }
+const FgDef* Engine::fgsFor (const NoteVoice& nv) const { const Slot* sl = slotOf (nv); if (sl && sl->layer) return sl->fg; return prog ? prog->fg : nullptr; }
 
 void Engine::releaseVoice (NoteVoice& nv) {
     if (! nv.active || nv.releasing) return;
@@ -346,24 +390,15 @@ void Engine::noteOn (int note, int vel) {
     susHeld[(size_t) note] = true;
     if (susPending[(size_t) note]) { susPending[(size_t) note] = false; noteOffNow (note); }
     int prev = lastNote; lastNote = note;
-    if (patch.active && bank) {
-        bool anySolo = false; for (auto& l : patch.layers) if (l.on && l.solo && l.preset >= 0) anySolo = true;
-        for (auto& l : patch.layers) {
-            if (! l.on || l.preset < 0 || l.preset >= (int) bank->presets.size() || (anySolo && ! l.solo)) continue;
-            if (note < l.keyLo || note > l.keyHi || vel < l.velLo || vel > l.velHi) continue;
-            lyIdx = (int) (&l - patch.layers); lyGain = layerLevel (lyIdx); lyPan = l.pan / 100.0f; lyCents = l.coarse * 100.0f + l.fine;
-            playPreset (bank->presets[(size_t) l.preset], note, vel, prev);
-        }
-        lyGain = 1; lyPan = 0; lyCents = 0; lyIdx = -1;
-        return;
-    }
-    const Preset* p = cur(); if (! p) return;
-    playPreset (*p, note, vel, prev);
+    if (! prog || ! bank) return;
+    for (int i = 0; i < prog->nSlots; ++i) playSlot (i, note, vel, prev);
 }
 
-void Engine::playPreset (const Preset& p, int note, int vel, int prev) {
-    playing = &p;
-    for (auto& v : p.voices) {
+void Engine::playSlot (int i, int note, int vel, int prev) {
+    const Slot& s = prog->slots[i]; if (! s.preset) return;
+    if (s.layer && (note < s.key.lo || note > s.key.hi || vel < s.vel.lo || vel > s.vel.hi || slotLevel (i) <= 0)) return;
+    slotIdx = i;
+    for (auto& v : s.preset->voices) {
         if (note < v.key.lo || note > v.key.hi || vel < v.vel.lo || vel > v.vel.hi) continue;
         int k = note + v.transpose; const Zone* z = nullptr;
         for (auto& zz : v.zones) if (zz.ref && k >= zz.key.lo && k <= zz.key.hi && vel >= zz.vel.lo && vel <= zz.vel.hi) { z = &zz; break; }
@@ -372,27 +407,15 @@ void Engine::playPreset (const Preset& p, int note, int vel, int prev) {
         if (m) monoOn (note, vel, v, *z, m);
         else startNote (note, vel, v, *z, glideTime (&v, prev, note) > 0 ? prev : -1, false, -1);
     }
-    playing = nullptr;
+    slotIdx = -1;
 }
 
-float Engine::layerLevel (int i) const {
-    if (i < 0 || i > 3 || ! patch.active) return 1;
-    bool anySolo = false; for (auto& l : patch.layers) if (l.on && l.solo && l.preset >= 0) anySolo = true;
-    const auto& l = patch.layers[i];
+float Engine::slotLevel (int i) const {
+    if (! prog || i < 0 || i >= prog->nSlots) return 1;
+    const Slot& l = prog->slots[i]; if (! l.layer) return 1;
+    bool anySolo = false; for (int k = 0; k < prog->nSlots; ++k) { auto& x = prog->slots[k]; if (x.preset && x.on && x.solo) anySolo = true; }
     if (! l.on || (anySolo && ! l.solo) || l.volDb <= -48) return 0;
     return std::pow (10.0f, l.volDb / 20.0f);
-}
-
-void Engine::setPatch (const Patch& p, bool reset) {
-    if (! reset) { patch = p; return; }   // a knob on a layer: playing notes follow its level, new notes everything
-    allNotesOff();
-    patch = p; monoGroups.clear(); lastSolo.clear();
-    // the controllers start where the first layer's preset puts them
-    if (patch.active && bank) for (auto& l : patch.layers) if (l.preset >= 0 && l.preset < (int) bank->presets.size()) {
-        auto& pr = bank->presets[(size_t) l.preset];
-        for (int k = 0; k < 16; ++k) ctrlVal[MIDI_AP[k]] = pr.hasIc ? pr.ic[(size_t) k] / 127.0f : 0.0f;
-        apChanged.store (0xffff); break;
-    }
 }
 
 void Engine::noteOff (int note) {
@@ -410,8 +433,8 @@ void Engine::noteOffNow (int note) {
 namespace { int prioOf (int m) { return m == 3 || m == 6 ? 1 : m == 4 || m == 7 ? 2 : 0; } }
 
 void Engine::monoOn (int note, int vel, const Voice& v, const Zone& z, int m) {
-    int gi = -1; for (size_t i = 0; i < monoGroups.size(); ++i) if (monoGroups[i].vd == &v) gi = (int) i;
-    if (gi < 0) { monoGroups.push_back ({}); gi = (int) monoGroups.size() - 1; monoGroups.back().vd = &v; lastSolo.push_back (-1); }
+    int gi = -1; for (size_t i = 0; i < monoGroups.size(); ++i) if (monoGroups[i].vd == &v && monoGroups[i].slot == slotIdx) gi = (int) i;
+    if (gi < 0) { monoGroups.push_back ({}); gi = (int) monoGroups.size() - 1; monoGroups.back().vd = &v; monoGroups.back().slot = slotIdx; lastSolo.push_back (-1); }
     auto& g = monoGroups[(size_t) gi]; g.m = m;
     g.held.erase (std::remove_if (g.held.begin(), g.held.end(), [&] (auto& h) { return h.first == note; }), g.held.end());
     g.held.push_back ({ note, vel });
@@ -472,11 +495,11 @@ void Engine::controller (int cc, int value) {
 }
 void Engine::pitchBend (int v14) { ctrlVal[16] = std::max (-1.0f, std::min (1.0f, (v14 - 8192) / 8191.0f)); }
 void Engine::channelPressure (int value) { ctrlVal[18] = value / 127.0f; }
-void Engine::programChange (int pc) {
-    if (! bank) return;
+int Engine::programChange (int pc) const {
+    if (! bank) return -1;
     int blk = bankLsb >= 0 ? bankLsb : bankMsb >= 0 ? bankMsb : 0;
     int idx = blk * 128 + pc;
-    if (idx >= 0 && idx < (int) bank->presets.size()) { allNotesOff(); setPreset (idx); }
+    return idx >= 0 && idx < (int) bank->presets.size() ? idx : -1;
 }
 void Engine::allNotesOff() {
     sustain = false; std::fill (susPending.begin(), susPending.end(), false); std::fill (susHeld.begin(), susHeld.end(), false);
@@ -499,7 +522,7 @@ void Engine::renderChunk (float* L, float* R, int n) {
     const float gA = fx ? fx->sendLevel (0) : 0.0f, gB = fx ? fx->sendLevel (1) : 0.0f;
     const bool bOpen = fx && fx->sendLevel (2) > 0;   // FX B takes sends (it isn't an insert)
     const double dt = 1.0 / sr;
-    const float driftAmt = set.uniDrift.load() / 100.0f * 12.0f;
+    const float driftAmt = 0;
     for (int base = 0; base < n; base += SUB) {
         int m = std::min (SUB, n - base);
         double subDur = m * dt;
@@ -509,9 +532,15 @@ void Engine::renderChunk (float* L, float* R, int n) {
             if (driftPh[k] >= 1) { driftPh[k] -= 1; driftFrom[k] = driftTo[k]; driftTo[k] = (float) std::uniform_real_distribution<> (-1, 1) (rng); }
             drift[k] = driftFrom[k] + (driftTo[k] - driftFrom[k]) * (float) (.5 - .5 * std::cos (PI * driftPh[k]));
         }
-        for (int k = 0; k < 3; ++k) {
-            if (set.lfo[k].free.load()) { const double nph = lfoFreePh[k] + set.lfo[k].rate.load() * subDur; if (std::floor (nph) != std::floor (lfoFreePh[k])) { lfoFreeHold[k][0] = lfoFreeHold[k][1]; lfoFreeHold[k][1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); } lfoFreePh[k] = nph - std::floor (nph); }
-            if (fgs[k].free && fgs[k].used()) fgAdvance (fgs[k], fgFree[k], subDur);
+        // free-running LFOs and function generators: one run per slot (4 layers + the panel's own) and number
+        vibPh += 5.5 * subDur; vibPh -= std::floor (vibPh);
+        if (prog) for (int g = 0; g < 5; ++g) {
+            const LfoSpec* lf = g < 4 ? (g < prog->nSlots && prog->slots[g].layer ? prog->slots[g].lfo : nullptr) : prog->lfo;
+            const FgDef* fg = g < 4 ? (g < prog->nSlots && prog->slots[g].layer ? prog->slots[g].fg : nullptr) : prog->fg;
+            for (int k = 0; k < 3; ++k) {
+                if (lf && lf[k].free && lf[k].used()) { double& ph = lfoFreePh[g][k]; const double nph = ph + lf[k].rate * subDur; if (std::floor (nph) != std::floor (ph)) { lfoFreeHold[g][k][0] = lfoFreeHold[g][k][1]; lfoFreeHold[g][k][1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); } ph = nph - std::floor (nph); }
+                if (fg && fg[k].free && fg[k].used()) fgAdvance (fg[k], fgFree[g][k], subDur);
+            }
         }
         for (auto& nv : voices) {
             if (! nv.active) continue;
@@ -543,17 +572,28 @@ void Engine::renderChunk (float* L, float* R, int n) {
                 float c = sig * g;
                 if (r.dst == DST_PITCH || r.dst == DST_FINE) pitch += c; else if (r.dst == DST_FILT) filt += c; else if (r.dst == DST_PAN) pan += c; else if (r.dst == DST_VOL) vol += c / 72.0f;
             }
-            // the three LFOs and the function generators (all voices)
+            // the panel's live settings: level, pan, tuning, sends, LFOs, filter follow the knobs while the key is held
+            if (! nv.releasing && prog && nv.progVer != prog->version) {
+                nv.progVer = prog->version;
+                if (const Slot* sl = slotOf (nv)) {
+                    nv.liveCents = slotCents (*sl);
+                    if (nv.layer) { nv.lyGT = slotLevel (nv.slot); nv.lyPan = sl->pan / 100.0f; nv.saT = sl->sendA / 100.0f; nv.sbT = sl->sendB / 100.0f; }
+                }
+                const LfoSpec* lf = lfosFor (nv); const FgDef* fg = fgsFor (nv);
+                for (int k = 0; k < 3; ++k) { if (lf) nv.ulfo[k] = lf[k]; if (fg) nv.ufg[k] = fg[k]; }
+                voiceFilter (nv, false);
+            }
+            const int fgSlot = nv.layer ? std::max (0, std::min (3, nv.slot)) : 4;
+            pitch += nv.liveCents - nv.liveCents0;
             float trem = 1;
             for (int k = 0; k < 3; ++k) {
-                const auto& L = set.lfo[k];
-                const float dp = L.pitch.load(), df = L.filter.load(), dv = L.vol.load(), dn = L.pan.load();
+                const auto& L = nv.ulfo[k];
+                const float dp = L.pitch, df = L.filter, dv = L.vol, dn = L.pan;
                 if (! dp && ! df && ! dv && ! dn) continue;
-                const bool freeRun = L.free.load(); const int shp = L.shape.load();
-                double& ph = freeRun ? lfoFreePh[k] : nv.ulfoPh[k]; float* hold = freeRun ? lfoFreeHold[k] : nv.ulfoHold[k];
+                double& ph = L.free ? lfoFreePh[fgSlot][k] : nv.ulfoPh[k]; float* hold = L.free ? lfoFreeHold[fgSlot][k] : nv.ulfoHold[k];
                 const double u = ph - std::floor (ph);
                 float val;
-                switch (shp) {
+                switch (L.shape) {
                     case 1: val = (float) (1 - 4 * std::fabs (u - .5)); break;
                     case 2: val = u < .5 ? 1.0f : -1.0f; break;
                     case 3: val = (float) (2 * u - 1); break;
@@ -562,30 +602,43 @@ void Engine::renderChunk (float* L, float* R, int n) {
                     case 6: val = hold[0] + (hold[1] - hold[0]) * (float) (.5 - .5 * std::cos (PI * u)); break;
                     default: val = (float) std::sin (2 * PI * u);
                 }
-                const float dly = L.delay.load(); if (dly > 0) val *= (float) std::min (1.0, nv.envT / dly);
+                if (L.delay > 0) val *= (float) std::min (1.0, nv.envT / L.delay);
                 pitch += (dp < 0 ? -1 : 1) * (dp / 100) * (dp / 100) * 1200 * val;
-                filt += (df < 0 ? -1 : 1) * (df / 100) * (df / 100) * 4800 * val;
+                if (nv.nStages) filt += (df < 0 ? -1 : 1) * (df / 100) * (df / 100) * 4800 * val;
                 const float tv = std::fabs (dv) / 200; trem += tv * (val - 1);
                 pan += val * dn / 100;
-                if (! freeRun) { const double nph = ph + L.rate.load() * subDur; if (std::floor (nph) != std::floor (ph)) { hold[0] = hold[1]; hold[1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); } ph = nph; }
+                if (! L.free) { const double nph = ph + L.rate * subDur; if (std::floor (nph) != std::floor (ph)) { hold[0] = hold[1]; hold[1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); } ph = nph; }
             }
             for (int k = 0; k < 3; ++k) {
-                const auto& f = fgs[k]; if (! f.used()) continue;
-                FgRun& r = f.free ? fgFree[k] : nv.fg[k];
+                const auto& f = nv.ufg[k]; if (! f.used()) continue;
+                FgRun& r = f.free ? fgFree[fgSlot][k] : nv.fg[k];
                 if (! f.free) fgAdvance (f, r, subDur);
                 float v = r.cur;
                 if (f.smooth) { const double d = fgStepSec (f); v = r.from + (r.cur - r.from) * (float) std::min (1.0, r.t / std::max (1e-4, d)); }
-                pitch += v * f.pitch * 100; filt += (f.filter < 0 ? -1 : 1) * (f.filter / 100) * (f.filter / 100) * 4800 * v;
+                pitch += v * f.pitch * 100; if (nv.nStages) filt += (f.filter < 0 ? -1 : 1) * (f.filter / 100) * (f.filter / 100) * 4800 * v;
                 const float tv = std::fabs (f.vol) / 200; trem += tv * (v - 1); pan += v * f.pan / 100;
             }
             vol *= std::max (0.0f, trem);
+            // mod wheel vibrato for sounds without their own routing
+            if (! nv.pv) pitch += (float) std::sin (2 * PI * vibPh) * 40.0f * ctrlVal[17];
             // bend and glide
-            pitch += ctrlVal[16] * (nv.ownBend ? nv.bendCents : set.bendRange.load() * 100.0f);
+            pitch += ctrlVal[16] * nv.bendCents;
             if (nv.glideDur > 0 && nv.glideT < nv.glideDur) { pitch += (float) (nv.glideFrom + (nv.glideTo - nv.glideFrom) * nv.glideT / nv.glideDur); nv.glideT += subDur; }
             else pitch += (float) nv.glideTo;
+            pan += nv.lyPan;
             pan = std::max (-1.0f, std::min (1.0f, pan));
-            { const float want = set.cutShiftOct.load() * 1200.0f; nv.shiftNow += (want - nv.shiftNow) * std::min (1.0f, (float) (subDur / .02)); }
-            filt += nv.shiftNow;
+            filt += nv.presetCents;
+            // the filter's stage settings glide (filter envelope, knob moves)
+            if (nv.gliding && nv.nStages) {
+                if (nv.stDelay > 0) nv.stDelay -= m;
+                else {
+                    nv.stK = nv.glideExp ? 1 - (1 - nv.stK) * std::exp (-(double) m / (nv.stTc * sr)) : std::min (1.0, nv.stK + nv.stKStep * m / 16.0);
+                    for (int i = 0; i < nv.nStages; ++i) { const auto& A = nv.stFrom[i]; const auto& Z = nv.stTo[i]; auto& S = nv.stages[i];
+                        S.t = Z.t; S.f = (float) std::exp (std::log (A.f) + (std::log (Z.f) - std::log (A.f)) * nv.stK); S.g = (float) (A.g + (Z.g - A.g) * nv.stK); S.q = (float) (A.q + (Z.q - A.q) * nv.stK); }
+                    if (nv.stK >= .9995) { for (int i = 0; i < 6; ++i) nv.stages[i] = nv.stTo[i]; nv.gliding = false; }
+                    nv.lastFiltCents = 1e9f;   // new coefficients
+                }
+            }
             // the cutoff target for the end of this little block; fast sweeps are followed sample by sample
             const float filtFrom = nv.lastFiltCents;
             const bool filtFast = nv.nStages && std::fabs (filt - filtFrom) > 3.0f;
@@ -594,12 +647,12 @@ void Engine::renderChunk (float* L, float* R, int n) {
             const Sample& s = *nv.s; const int nc = (int) nv.copies.size();
             double inc[8];
             for (int k = 0; k < nc; ++k) { float c = pitch + nv.copies[(size_t) k].det + (nv.copies[(size_t) k].drift >= 0 ? drift[nv.copies[(size_t) k].drift] * driftAmt : 0.0f); inc[k] = nv.baseRate * std::pow (2.0, c / 1200.0); }
-            if (nv.layer >= 0) nv.lyG += (layerLevel (nv.layer) - nv.lyG) * .35f;
+            if (nv.layer) nv.lyG += (nv.lyGT - nv.lyG) * .35f;
             { float ta = gA, tb = gB;
-              if (nv.layer >= 0 && patch.active) { const auto& ly = patch.layers[nv.layer]; if (ly.sendA >= 0) ta = ly.sendA / 100.0f; if (ly.sendB >= 0) tb = bOpen ? ly.sendB / 100.0f : 0.0f; }
+              if (nv.layer) { ta = nv.saT; tb = bOpen ? nv.sbT : 0.0f; }
               nv.sa += (ta - nv.sa) * .35f; nv.sb += (tb - nv.sb) * .35f; }
             const float panFrom = nv.panNow; nv.panNow = pan;
-            const bool loop = s.loop && s.loopEnd > s.loopStart; const double loopLen = loop ? (s.loopEnd + 1 - s.loopStart) : 0, loopEndP = s.loopEnd + 1;
+            const bool loop = nv.loop; const double loopLen = loop ? (s.loopEnd + 1 - s.loopStart) : 0, loopEndP = s.loopEnd + 1;
             const bool st = s.channels == 2 && ! s.R.empty();
             for (int i = 0; i < m; ++i) {
                 // read every copy (cubic), mixed to mono or stereo
@@ -658,6 +711,23 @@ void Engine::renderChunk (float* L, float* R, int n) {
             if (nv.ended) nv.active = false;
         }
     }
+    // a patch's master filter: one filter over every layer, with its own LFO (up to +-3 octaves)
+    if (prog && prog->patch && prog->mf.type != F_BYPASS) {
+        if (mfVer != prog->version) { int used; filterStages (prog->mf, 0, mfSt, used); mfN = 6; mfVer = prog->version; mfLast = 1e9f; }
+        const float depth = std::pow (prog->mfDepth / 100.0f, 2.0f) * 3600.0f;
+        for (int base = 0; base < n; base += SUB) {
+            const int m = std::min (SUB, n - base);
+            const float c = depth * (float) std::sin (2 * PI * mfPh); mfPh += prog->mfRate * m / sr; mfPh -= std::floor (mfPh);
+            if (std::fabs (c - mfLast) > .25f) { for (int i = 0; i < mfN; ++i) setBiquad (mfBq[i], mfSt[i], c); mfLast = c; }
+            for (int i = base; i < base + m; ++i) {
+                double xl = L[i], xr = R[i];
+                for (int sIdx = 0; sIdx < mfN; ++sIdx) { auto& q = mfBq[sIdx];
+                    double yl = q.b0 * xl + q.b1 * q.x1[0] + q.b2 * q.x2[0] - q.a1 * q.y1[0] - q.a2 * q.y2[0]; q.x2[0] = q.x1[0]; q.x1[0] = xl; q.y2[0] = q.y1[0]; q.y1[0] = yl; xl = yl;
+                    double yr = q.b0 * xr + q.b1 * q.x1[1] + q.b2 * q.x2[1] - q.a1 * q.y1[1] - q.a2 * q.y2[1]; q.x2[1] = q.x1[1]; q.x1[1] = xr; q.y2[1] = q.y1[1]; q.y1[1] = yr; xr = yr; }
+                L[i] = (float) xl; R[i] = (float) xr;
+            }
+        }
+    } else if (mfVer != -2) { for (auto& q : mfBq) q = Biquad(); mfVer = -2; }
     // output: the browser version's voice bus level -> Analog colour -> bus compressor -> master knob -> soft ceiling
     if (fx) fx->sends (L, R, aL, aR, bL, bR, n);   // reverb and FX B returns join the voice bus
     for (int i = 0; i < n; ++i) { L[i] *= masterGain; R[i] *= masterGain; }

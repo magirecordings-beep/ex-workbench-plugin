@@ -4,6 +4,7 @@
 #pragma once
 #include "Bank.h"
 #include "MasterFx.h"
+#include "Program.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -13,44 +14,18 @@
 
 namespace exw {
 
-// user settings shared with the UI / host parameters (read by the audio thread every block)
+// user settings shared with the host parameters (read by the audio thread every block)
 struct Settings {
     std::atomic<int> keys { 0 };            // 0 preset, 1 poly, 2 mono, 3 legato
     std::atomic<int> glideMode { 0 };       // 0 preset, 1 off, 2 custom
     std::atomic<float> glideMs { 120 };
-    std::atomic<bool> uniOn { false };
-    std::atomic<int> uniVoices { 5 };
-    std::atomic<float> uniDetune { 20 }, uniSpread { 70 }, uniBlend { 70 }, uniDrift { 15 };
-    std::atomic<bool> bendOwn { true };     // presets use their own bend range
-    std::atomic<float> bendRange { 2 };     // semitones, otherwise
     std::atomic<float> masterDb { 0 };
-    std::atomic<float> tuneCents { 0 };
     std::array<std::atomic<int>, 16> apCC;  // CC number for MIDI A-P (-1 none)
     // Analog colour on the output
     std::atomic<bool> colOn { true }, colMono { true };
     std::atomic<float> colWarmth { 35 }, colWeight { 40 }, colSub { 25 }, colSmooth { 20 };
-    // Filter panel on presets: shift every voice's filter (octaves, resonance %)
-    std::atomic<float> cutShiftOct { 0 }, resShift { 0 };
-    // amp envelope: 0 = the preset's own (times scaled by envTime), 1 = own ADSR
-    std::atomic<int> envMode { 0 };
-    std::atomic<float> envA { .002f }, envD { .6f }, envS { 100 }, envR { .35f }, envVel { .7f }, envTime { 1 };
-    // three LFOs on every voice: shape 0 sine 1 triangle 2 square 3 saw up 4 saw down 5 random 6 smooth random
-    struct Lfo { std::atomic<int> shape { 0 }; std::atomic<float> rate { 5 }, delay { 0 }; std::atomic<bool> free { false }; std::atomic<float> pitch { 0 }, filter { 0 }, vol { 0 }, pan { 0 }; };
-    Lfo lfo[3];
     std::atomic<float> tempo { 120 };    // for synced function generators
     Settings();
-};
-
-// a function generator: a row of steps (-1..1) played in time, to pitch (semitones), filter, volume and pan
-struct FgDef {
-    float steps[64] {};
-    int end = 8;
-    bool sync = true; int div = 3;   // 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32
-    float rate = 6;                  // steps per second when not synced
-    int dir = 0;                     // forward, reverse, pendulum, random, walk, once
-    bool smooth = false, free = false;
-    float pitch = 0, filter = 0, vol = 0, pan = 0;
-    bool used() const { if (! pitch && ! filter && ! vol && ! pan) return false; for (int i = 0; i < end && i < 64; ++i) if (steps[i] != 0) return true; return false; }
 };
 
 // the effects live outside the engine (the plugin supplies them): the engine fills two send buses per block,
@@ -59,22 +34,7 @@ struct FxHook {
     virtual ~FxHook() = default;
     virtual void sends (float* L, float* R, const float* aL, const float* aR, const float* bL, const float* bR, int n) = 0;
     virtual void post (float* L, float* R, int n) = 0;
-    virtual float sendLevel (int bus) const = 0;   // 0/1: global send A/B (0..1); 2: 1 while FX B takes sends
-};
-
-// a user patch: up to four layers, each one of the bank's presets with its own level, pan, tuning and ranges
-struct Layer {
-    int preset = -1;                       // index into the bank's presets (-1 = empty)
-    bool on = true, solo = false;
-    float volDb = 0, pan = 0;              // pan -100..100
-    int coarse = 0; float fine = 0;        // semitones, cents
-    int keyLo = 0, keyHi = 127, velLo = 1, velHi = 127;
-    float sendA = -1, sendB = -1;          // % to the effects; -1 = use the global sends
-};
-struct Patch {
-    bool active = false;                   // false: play the selected preset on its own
-    std::string name;
-    Layer layers[4];
+    virtual float sendLevel (int bus) const = 0;   // 2: 1 while FX B takes sends (it isn't an insert)
 };
 
 class Engine {
@@ -82,11 +42,10 @@ public:
     explicit Engine (Settings& s);
     void prepare (double sampleRate);
     void setBank (std::shared_ptr<const Bank> bank);   // audio thread
-    void setPreset (int index);                           // audio thread; resets controllers to the preset's starts
-    void setPatch (const Patch& p, bool reset);
-    void setFg (int i, const FgDef& f) { if (i >= 0 && i < 3) fgs[i] = f; }   // audio thread           // audio thread; reset = a new patch (notes stop), else a live edit
-    bool patchActive() const { return patch.active; }
-    int presetIndex() const { return preset; }
+    // audio thread. The caller keeps the program alive until a later one has been taken.
+    // reset: a new sound (notes stop, mono groups clear); ic: where the A-P knobs start (null = leave them)
+    void setProgram (const Program* p, bool reset, const uint8_t* ic);
+    const Program* program() const { return prog; }
 
     // MIDI (audio thread)
     void noteOn (int note, int vel);
@@ -94,7 +53,7 @@ public:
     void controller (int cc, int value);
     void pitchBend (int value14);
     void channelPressure (int value);
-    void programChange (int program);
+    int programChange (int program) const;   // the bank preset index a program change asks for (-1 none)
     void allNotesOff();
     // knobs A-P (index 0..15), 0..1, e.g. from host automation
     void setApKnob (int i, float v);
@@ -130,20 +89,24 @@ private:
         float bendCents = 0; bool ownBend = false;
         double glideFrom = 0, glideTo = 0, glideT = 0, glideDur = 0;  // cents offset ramp
         // filter
-        int nStages = 0; StageSpec stages[6] {}; Biquad bq[6]; bool filtMod = false; float lastFiltCents = 1e9f; float shiftNow = 0;
+        int nStages = 0; StageSpec stages[6] {}; Biquad bq[6]; bool filtMod = false; float lastFiltCents = 1e9f;
+        // the stage settings glide (filter envelope decay, live knob moves), in the browser worklet's way
+        StageSpec stFrom[6] {}, stTo[6] {}; bool gliding = false, glideExp = false; double stK = 1, stKStep = 0, stTc = .01; int stDelay = 0;
+        int filtRule = 0; float filtQ = 0; int progVer = -1; float presetCents = 0;   // 0 own preset filter, 1 preset + shift, 2 panel filter, 3 layer filter
         // unison copies (1 = plain)
         std::vector<Copy> copies; bool stereoPath = false;
         float panNow = 0;
         int kb = 0; int monoGroup = -1;
-        int layer = -1; float lyG = 1; float sa = 0, sb = 0;
-        double ulfoPh[3] {}; float ulfoHold[3][2] {}; FgRun fg[3];   // the LFO and function generator runs of this note   // patch layer (-1 none) and its level, following the layer's volume live
+        int slot = -1; bool layer = false; float lyG = 1; float sa = 0, sb = 0;   // which slot of the program, its level (follows live)
+        bool pv = false, loop = false; float liveCents0 = 0, liveCents = 0, lyPan = 0, lyGT = 1, saT = 0, sbT = 0;
+        LfoSpec ulfo[3]; FgDef ufg[3];         // preset modulation in use; tuning when the note started
+        double ulfoPh[3] {}; float ulfoHold[3][2] {}; FgRun fg[3];   // the LFO and function generator runs of this note
     };
-    struct MonoGroup { const Voice* vd = nullptr; std::vector<std::pair<int, int>> held; int cur = -1; int m = 0; };
+    struct MonoGroup { const Voice* vd = nullptr; int slot = -1; std::vector<std::pair<int, int>> held; int cur = -1; int m = 0; };
 
     Settings& set;
     double sr = 44100;
     std::shared_ptr<const Bank> bank;
-    int preset = -1;
     std::vector<NoteVoice> voices;
     std::vector<MonoGroup> monoGroups;
     float ctrlVal[256] {};
@@ -154,28 +117,35 @@ private:
     std::mt19937 rng { 12345 };
     float drift[8] {}, driftFrom[8] {}, driftTo[8] {}; double driftPh[8] {};
     float masterGain = .24f;
-    Patch patch;
+    const Program* prog = nullptr;
     FxHook* fx = nullptr;
-    FgDef fgs[3];
-    FgRun fgFree[3]; double lfoFreePh[3] {}; float lfoFreeHold[3][2] {};
+    FgRun fgFree[5][3]; double lfoFreePh[5][3] {}; float lfoFreeHold[5][3][2] {}; double vibPh = 0;
+    // patch master filter
+    StageSpec mfSt[6] {}; int mfN = 0; Biquad mfBq[6]; double mfPh = 0; int mfVer = -1; float mfLast = 1e9f;
     std::mt19937 lfoRng { 99 };
     void fgAdvance (const FgDef& f, FgRun& r, double dt);
     double fgStepSec (const FgDef& f) const;
     std::vector<float> busA[2], busB[2];
     void renderChunk (float* L, float* R, int n);
-    // the layer a note is being started for (set around startNote)
-    const Preset* playing = nullptr; float lyGain = 1, lyPan = 0, lyCents = 0; int lyIdx = -1;
-    float layerLevel (int i) const;
-    void playPreset (const Preset& p, int note, int vel, int prev);
+    // the slot a note is being started for (set around startNote)
+    int slotIdx = -1;
+    const Slot* slotOf (const NoteVoice& nv) const { return prog && nv.slot >= 0 && nv.slot < prog->nSlots ? &prog->slots[nv.slot] : nullptr; }
+    float slotLevel (int i) const;
+    float slotCents (const Slot& s) const { return (s.layer ? s.coarse * 100.0f + s.fine : 0.0f) + (prog ? prog->tune : 0.0f); }
+    void playSlot (int i, int note, int vel, int prev);
+    const LfoSpec* lfosFor (const NoteVoice& nv) const;
+    const FgDef* fgsFor (const NoteVoice& nv) const;
+    bool baseSpec (const NoteVoice& nv, FiltSpec& out) const;   // false: no filter
+    void filterStages (const FiltSpec& sp, float mod, StageSpec out[6], int& n) const;
+    void voiceFilter (NoteVoice& nv, bool start);
     MasterFx master;
 
-    const Preset* cur() const;
     float rateSec (float x) const;
     void startNote (int note, int vel, const Voice& v, const Zone& z, int glideFrom, bool solo, int monoGroup);
     void releaseVoice (NoteVoice& nv);
     void noteOffNow (int note);
     void planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fixed[8]);
-    void computeStages (NoteVoice& nv, int type, float freq, float res);
+
     void setBiquad (Biquad& b, const StageSpec& s, float cents);
     float glideTime (const Voice* vd, int from, int to) const;
     int kbMode (const Voice* vd) const;

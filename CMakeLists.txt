@@ -55,7 +55,8 @@ target_sources(XtremeLab PRIVATE
 target_compile_definitions(XtremeLab PUBLIC
     JUCE_WEB_BROWSER=1
     JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0)
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_MODAL_LOOPS_PERMITTED=1)
 # Windows: the faceplate runs in Microsoft Edge WebView2 (built into Windows 10/11), linked statically
 if(WIN32)
     target_compile_definitions(XtremeLab PUBLIC JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1)

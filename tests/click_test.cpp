@@ -19,7 +19,7 @@ int main (int argc, char** argv) {
     std::mt19937 rng (1);
     for (auto nm : names) {
         int idx = -1; for (size_t i = 0; i < bank->presets.size(); ++i) if (bank->presets[i].name == nm) idx = (int) i;
-        if (idx < 0) continue; eng.setPreset (idx);
+        if (idx < 0) continue; static Program pg; pg = Program(); pg.version++; pg.nSlots = 1; pg.slots[0].preset = &bank->presets[(size_t) idx]; pg.slots[0].isPreset = true; eng.setProgram (&pg, true, pg.slots[0].preset && pg.slots[0].preset->hasIc ? pg.slots[0].preset->ic.data() : nullptr);
         const int n = sr * 4; std::vector<float> L (n), R (n);
         // events: chord every 250 ms held 150 ms, plus a fast repeated note
         std::vector<std::tuple<int, int, int>> ev; // sample, note, vel (0 = off)

@@ -2,15 +2,10 @@
 #include "BinaryData.h"
 
 namespace {
-const char* AP_LETTERS = "ABCDEFGHIJKLMNOP";
-const int AP_DEFAULT_CC[16] = { 21, 22, 23, 24, 25, 26, 27, 28, 70, 71, 72, 73, 91, 93, 82, 83 };
 juce::var obj (std::initializer_list<std::pair<const char*, juce::var>> kv) {
     auto* o = new juce::DynamicObject(); for (auto& p : kv) o->setProperty (p.first, p.second); return juce::var (o);
 }
-}
-
-namespace {
-// Windows draws the faceplate with Edge WebView2; it needs a writable folder of its own (a DAW's install folder isn't)
+// Windows draws the panel with Edge WebView2; it needs a writable folder of its own (a DAW's install folder isn't)
 juce::WebBrowserComponent::Options browserOptions() {
     juce::WebBrowserComponent::Options o;
    #if JUCE_WINDOWS
@@ -22,6 +17,9 @@ juce::WebBrowserComponent::Options browserOptions() {
    #endif
     return o;
 }
+juce::WebBrowserComponent::Resource bytes (const void* d, size_t n, const char* mime) {
+    juce::WebBrowserComponent::Resource r; auto* b = reinterpret_cast<const std::byte*> (d); r.data.assign (b, b + n); r.mimeType = mime; return r;
+}
 }
 
 ExwEditor::ExwEditor (ExwProcessor& p)
@@ -29,7 +27,7 @@ ExwEditor::ExwEditor (ExwProcessor& p)
       web (browserOptions()
                .withNativeIntegrationEnabled()
                .withKeepPageLoadedWhenBrowserIsHidden()
-               .withResourceProvider ([] (const juce::String& url) { return resource (url); })
+               .withResourceProvider ([this] (const juce::String& url) { return resource (url); })
                .withEventListener ("exw", [this] (juce::var v) { handle (v); })) {
     addAndMakeVisible (web);
     web.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
@@ -37,154 +35,139 @@ ExwEditor::ExwEditor (ExwProcessor& p)
     setResizeLimits (800, 480, 3200, 1920);
     getConstrainer()->setFixedAspectRatio (1600.0 / 960.0);
     setSize (1280, 768);
-    startTimerHz (20);
+    startTimerHz (25);
 }
 
 ExwEditor::~ExwEditor() { stopTimer(); }
 
 void ExwEditor::resized() { web.setBounds (getLocalBounds()); }
 
+// the page, and the bank it plays: the .exb itself (the page reads its presets with its own parser),
+// the SamplePool's samples (names, rates, loops) and their audio for the waveform display and exports
 std::optional<juce::WebBrowserComponent::Resource> ExwEditor::resource (const juce::String& url) {
     auto path = url.upToFirstOccurrenceOf ("?", false, false);
     if (path == "/" || path == "/index.html" || path.isEmpty()) {
-        juce::WebBrowserComponent::Resource r;
-        auto* d = reinterpret_cast<const std::byte*> (BinaryData::index_html);
-        r.data.assign (d, d + BinaryData::index_htmlSize);
-        r.mimeType = "text/html";
-        return r;
+        // the page's own remembered settings go in with it, so they are there before its first line runs
+        auto html = juce::String::fromUTF8 (BinaryData::index_html, BinaryData::index_htmlSize);
+        html = html.replace ("/*EXW_LS*/{}", juce::JSON::toString (lsGet(), true).replace ("</", "<\\/"));
+        return bytes (html.toRawUTF8(), html.getNumBytesAsUTF8(), "text/html");
+    }
+    auto b = proc.currentBank();
+    if (path == "/x/exb") {
+        juce::MemoryBlock mb; if (! b || ! juce::File (juce::String::fromUTF8 (b->path.c_str())).loadFileAsData (mb)) return std::nullopt;
+        return bytes (mb.getData(), mb.getSize(), "application/octet-stream");
+    }
+    if (path == "/x/samples.json") {
+        if (! b) return std::nullopt;
+        // which sample-list number each pool sample answers to (so the page resolves zones the same way)
+        std::map<const exw::Sample*, int> sl;
+        for (auto& pr : b->presets) for (auto& v : pr.voices) for (auto& z : v.zones) if (z.ref && ! sl.count (z.ref)) sl[z.ref] = z.sample;
+        juce::Array<juce::var> list;
+        for (size_t i = 0; i < b->samples.size(); ++i) {
+            auto& s = *b->samples[i];
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("i", (int) i); o->setProperty ("name", juce::String::fromUTF8 (s.name.c_str())); o->setProperty ("rate", s.rate); o->setProperty ("channels", s.channels);
+            o->setProperty ("frames", s.frames); o->setProperty ("loop", s.loop); o->setProperty ("loopStart", s.loopStart); o->setProperty ("loopEnd", s.loopEnd);
+            if (auto it = sl.find (&s); it != sl.end()) o->setProperty ("sl", it->second);
+            list.add (juce::var (o));
+        }
+        auto j = juce::JSON::toString (juce::var (list), true);
+        return bytes (j.toRawUTF8(), j.getNumBytesAsUTF8(), "application/json");
+    }
+    if (path.startsWith ("/x/pcm/")) {
+        int i = path.fromLastOccurrenceOf ("/", false, false).getIntValue();
+        if (! b || i < 0 || i >= (int) b->samples.size()) return std::nullopt;
+        auto& s = *b->samples[(size_t) i];
+        // 16-bit, channels one after the other
+        std::vector<int16_t> d (s.L); if (s.channels == 2 && ! s.R.empty()) d.insert (d.end(), s.R.begin(), s.R.end());
+        return bytes (d.data(), d.size() * 2, "application/octet-stream");
     }
     return std::nullopt;
 }
 
-juce::StringArray ExwEditor::favourites() {
-    return juce::StringArray::fromLines (proc.userSettings().getValue ("favourites"));
+juce::var ExwEditor::bankInfo() const {
+    auto b = proc.currentBank(); if (! b) return {};
+    return obj ({ { "name", juce::String::fromUTF8 (b->name.c_str()) }, { "path", juce::String::fromUTF8 (b->path.c_str()) }, { "ver", proc.bankVersion() }, { "missing", b->missingZones }, { "samples", (int) b->samples.size() } });
 }
 
-juce::var ExwEditor::presetInfo (int index) const {
-    auto b = proc.currentBank(); if (! b || index < 0 || index >= (int) b->presets.size()) return {};
-    const auto& pr = b->presets[(size_t) index];
-    juce::Array<juce::var> labels, ic;
-    for (int i = 0; i < 16; ++i) { labels.add (juce::String::fromUTF8 (pr.labels[(size_t) i].c_str())); ic.add (pr.hasIc ? (int) pr.ic[(size_t) i] : 0); }
-    // which knobs the preset actually uses (so unnamed but used ones still show)
-    juce::Array<juce::var> used;
-    for (int i = 0; i < 16; ++i) {
-        bool u = false; int src = exw::Engine::apSrc (i);
-        for (auto& v : pr.voices) for (auto& c : v.cords) if (c.src == src && (c.amt != 0 || c.dst >= 168)) u = true;
-        used.add (u);
-    }
-    int kb = 0; float glide = 0, bend = -1; int zones = 0;
-    for (auto& v : pr.voices) { if (v.kb && ! kb) kb = v.kb; if (v.glide > 0 && glide == 0) glide = v.glide; if (v.bendUp >= 0 && bend < 0) bend = v.bendUp; zones += (int) v.zones.size(); }
-    int filt = -1; for (auto& v : pr.voices) if (v.hasFilter) { filt = v.ftype; break; }
-    return obj ({ { "index", index }, { "name", juce::String::fromUTF8 (pr.name.c_str()) }, { "voices", (int) pr.voices.size() }, { "zones", zones },
-                  { "kb", kb }, { "glide", glide }, { "bend", bend }, { "filter", filt }, { "labels", labels }, { "ic", ic }, { "used", used } });
-}
+juce::var ExwEditor::lsGet() { auto v = juce::JSON::parse (proc.userSettings().getValue ("ls")); return v.isObject() ? v : juce::var (new juce::DynamicObject()); }
+void ExwEditor::lsPut (const juce::var& o) { proc.userSettings().setValue ("ls", juce::JSON::toString (o, true)); proc.userSettings().saveIfNeeded(); }
 
-void ExwEditor::sendState (bool withPresets) {
-    auto b = proc.currentBank();
-    juce::Array<juce::var> presets;
-    if (withPresets && b) for (auto& pr : b->presets) presets.add (juce::String::fromUTF8 (pr.name.c_str()));
+void ExwEditor::sendInit() {
     juce::Array<juce::var> apcc; for (int i = 0; i < 16; ++i) apcc.add (proc.settings.apCC[(size_t) i].load());
-    juce::Array<juce::var> favs; for (auto& f : favourites()) if (f.isNotEmpty()) favs.add (f);
-    auto* po = new juce::DynamicObject();
-    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) { float v = r->convertFrom0to1 (r->getValue()); po->setProperty (r->getParameterID(), v); sentParams[r->getParameterID()] = v; }
-    auto recent = juce::File (proc.userSettings().getValue ("recentBank"));
-    auto msg = obj ({ { "type", "state" }, { "bank", b ? juce::var (juce::String::fromUTF8 (b->name.c_str())) : juce::var() }, { "status", proc.bankStatus() },
-                      { "loading", proc.isLoading() }, { "recent", recent.existsAsFile() ? recent.getFileName() : juce::String() },
-                      { "missing", b ? b->missingZones : 0 }, { "preset", proc.shownPreset() }, { "info", presetInfo (proc.shownPreset()) },
-                      { "params", juce::var (po) }, { "apcc", apcc }, { "favs", favs } });
     juce::Array<juce::var> knobs; for (int i = 0; i < 16; ++i) { knobs.add (proc.knob (i)); sentKnobs[i] = proc.knob (i); }
-    msg.getDynamicObject()->setProperty ("knobs", knobs);
-    if (withPresets) msg.getDynamicObject()->setProperty ("presets", presets);
-    // patches: the one playing (if any) and the saved library's names
-    msg.getDynamicObject()->setProperty ("patch", proc.currentPatch());
-    msg.getDynamicObject()->setProperty ("patchOn", proc.patchPlaying());
-    juce::Array<juce::var> names; if (auto* a = proc.patchLibrary().getArray()) for (auto& p : *a) names.add (p["name"]);
-    msg.getDynamicObject()->setProperty ("patches", names);
-    msg.getDynamicObject()->setProperty ("fgs", proc.fgList());
-    send (msg);
-    sentBankVer = proc.bankVersion(); sentPreset = proc.shownPreset(); sentLearn = proc.learnedVersion(); sentPatchVer = proc.patchVersion();
+    auto* po = new juce::DynamicObject();
+    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) po->setProperty (r->getParameterID(), r->convertFrom0to1 (r->getValue()));
+    auto recent = juce::File (proc.userSettings().getValue ("recentBank"));
+    send (obj ({ { "type", "init" }, { "ui", proc.uiState() }, { "engine", proc.engineState() }, { "ls", lsGet() }, { "patches", proc.patchLibrary() },
+                 { "apcc", apcc }, { "knobs", knobs }, { "params", juce::var (po) }, { "bank", bankInfo() }, { "loading", proc.isLoading() }, { "status", proc.bankStatus() },
+                 { "recent", recent.existsAsFile() ? recent.getFullPathName() : juce::String() } }));
+    sentBankVer = proc.bankVersion();
 }
 
 void ExwEditor::timerCallback() {
     if (! ready) return;
-    if (proc.bankVersion() != sentBankVer) { sendState (true); return; }
-    if (proc.shownPreset() != sentPreset || proc.learnedVersion() != sentLearn || proc.patchVersion() != sentPatchVer) { sendState (false); return; }
-    // live status: notes, knob positions (MIDI moves them), loading progress, parameters the host changed
-    juce::Array<juce::var> knobs; bool knobsMoved = false;
-    for (int i = 0; i < 16; ++i) { float k = proc.knob (i); knobs.add (k); if (std::abs (k - sentKnobs[i]) > 1e-4f) { knobsMoved = true; sentKnobs[i] = k; } }
-    auto* changed = new juce::DynamicObject(); bool any = false;
-    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) {
-        float v = r->convertFrom0to1 (r->getValue()); auto id = r->getParameterID();
-        if (sentParams[id] != v) { sentParams[id] = v; changed->setProperty (id, v); any = true; }
-    }
-    auto msg = obj ({ { "type", "status" }, { "notes", proc.notesPlaying() }, { "players", proc.playersPlaying() }, { "arp", proc.arpKeys() }, { "loading", proc.isLoading() }, { "progress", proc.loadProgress() }, { "status", proc.bankStatus() } });
-    if (knobsMoved) msg.getDynamicObject()->setProperty ("knobs", knobs);
-    if (any) msg.getDynamicObject()->setProperty ("params", juce::var (changed)); else delete changed;
+    if (proc.bankVersion() != sentBankVer && ! proc.isLoading()) { sentBankVer = proc.bankVersion(); send (obj ({ { "type", "bank" }, { "bank", bankInfo() }, { "status", proc.bankStatus() } })); }
+    juce::Array<juce::var> knobs; bool moved = false;
+    for (int i = 0; i < 16; ++i) { float k = proc.knob (i); knobs.add (k); if (std::abs (k - sentKnobs[i]) > 1e-4f) { moved = true; sentKnobs[i] = k; } }
+    juce::Array<juce::var> midi; proc.midiForUi (midi);
+    auto msg = obj ({ { "type", "status" }, { "notes", proc.notesPlaying() }, { "arp", proc.arpKeys() }, { "peak", juce::Array<juce::var> { proc.peak (0), proc.peak (1) } } });
+    auto* o = msg.getDynamicObject();
+    if (moved) o->setProperty ("knobs", knobs);
+    if (midi.size()) o->setProperty ("midi", midi);
+    if (proc.isLoading() || sentLoading || proc.bankStatus() != sentStatus) { o->setProperty ("loading", proc.isLoading()); o->setProperty ("progress", proc.loadProgress()); o->setProperty ("status", proc.bankStatus()); sentStatus = proc.bankStatus(); sentLoading = proc.isLoading(); }
+    auto sel = proc.takeSelectRequest(); if (sel.isNotEmpty()) o->setProperty ("select", sel);
     send (msg);
 }
 
 void ExwEditor::handle (const juce::var& m) {
     auto type = m["type"].toString();
-    if (type == "ready") { ready = true; sendState (true); }
-    else if (type == "loadBank") {
-        auto start = proc.lastBankFile.existsAsFile() ? proc.lastBankFile.getParentDirectory() : juce::File (proc.userSettings().getValue ("recentBank")).getParentDirectory();
-        chooser = std::make_unique<juce::FileChooser> ("Choose an Emulator X bank (.exb). Its SamplePool is found next to it automatically.", start, "*.exb");
-        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
-            auto f = fc.getResult(); if (f.existsAsFile()) proc.loadBankAsync (f, 0);
-        });
-    }
-    else if (type == "loadRecent") { juce::File f (proc.userSettings().getValue ("recentBank")); if (f.existsAsFile()) proc.loadBankAsync (f, 0); }
-    else if (type == "preset") proc.selectPreset ((int) m["index"]);
+    if (type == "ready") { ready = true; sendInit(); }
+    else if (type == "engine") proc.setEngineState (m["state"], (bool) m["reset"], m["ic"]);
+    else if (type == "ui") proc.setUiState (m["state"]);
+    else if (type == "knobs") proc.setKnobs (m["values"]);
+    else if (type == "apcc") proc.setApCC (m["list"]);
     else if (type == "param") {
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (proc.params.getParameter (m["id"].toString()))) {
             float v = (float) (double) m["value"];
-            r->beginChangeGesture(); r->setValueNotifyingHost (r->convertTo0to1 (v)); r->endChangeGesture();
-            sentParams[r->getParameterID()] = r->convertFrom0to1 (r->getValue());
+            if (std::abs (r->convertFrom0to1 (r->getValue()) - v) > 1e-6f) { r->beginChangeGesture(); r->setValueNotifyingHost (r->convertTo0to1 (v)); r->endChangeGesture(); }
         }
     }
-    else if (type == "patch") { proc.setPatch (m["patch"], (bool) m["reset"]); sentPatchVer = proc.patchVersion(); } // the UI already shows it
-    else if (type == "leavePatch") proc.leavePatch();
-    else if (type == "fgs") proc.setFgs (m["fgs"]);
-    else if (type == "patchSave") {
-        // store under its name (replacing one with the same name)
-        auto lib = proc.patchLibrary(); auto* a = lib.getArray(); auto p = m["patch"]; auto nm = p["name"].toString();
-        int at = -1; for (int i = 0; i < a->size(); ++i) if ((*a)[i]["name"].toString() == nm) at = i;
-        if (at >= 0) a->set (at, p); else a->add (p);
-        proc.storePatchLibrary (lib);
-    }
-    else if (type == "patchLoad") { auto lib = proc.patchLibrary(); int i = (int) m["index"]; if (auto* a = lib.getArray(); a && i >= 0 && i < a->size()) proc.setPatch ((*a)[i], true); }
-    else if (type == "patchDelete") { auto lib = proc.patchLibrary(); int i = (int) m["index"]; if (auto* a = lib.getArray(); a && i >= 0 && i < a->size()) { a->remove (i); proc.storePatchLibrary (lib); } }
-    else if (type == "patchImport") {
-        chooser = std::make_unique<juce::FileChooser> ("Open Xtreme Lab patches (.exwp)", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.exwp;*.json");
-        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems, [this] (const juce::FileChooser& fc) {
-            auto lib = proc.patchLibrary(); auto* a = lib.getArray(); int n = 0;
+    else if (type == "note") { int n = juce::jlimit (0, 127, (int) m["note"]), v = (int) m["vel"]; proc.queue (v > 0 ? juce::MidiMessage::noteOn (1, n, (juce::uint8) juce::jlimit (1, 127, v)) : juce::MidiMessage::noteOff (1, n)); }
+    else if (type == "midi") { auto* d = m["data"].getArray(); if (d && d->size() == 3) proc.queue (juce::MidiMessage ((int) (*d)[0], (int) (*d)[1], (int) (*d)[2])); }
+    else if (type == "panic") proc.queue (juce::MidiMessage::allNotesOff (1));
+    else if (type == "openBank" || type == "openFiles") {
+        auto recent = juce::File (proc.userSettings().getValue ("recentBank"));
+        auto start = proc.lastBankFile.existsAsFile() ? proc.lastBankFile.getParentDirectory() : recent.existsAsFile() ? recent.getParentDirectory() : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+        const bool files = type == "openFiles";
+        chooser = std::make_unique<juce::FileChooser> (files ? "Open an Emulator X bank (.exb) or Xtreme Lab patches (.exwp)" : "Open an Emulator X bank (.exb). Its SamplePool is found next to it automatically.",
+                                                       start, files ? "*.exb;*.exwp;*.json" : "*.exb");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | (files ? juce::FileBrowserComponent::canSelectMultipleItems : 0), [this] (const juce::FileChooser& fc) {
             for (auto& f : fc.getResults()) {
-                auto j = juce::JSON::parse (f.loadFileAsString());
-                if (auto* ps = j["patches"].getArray()) for (auto& p : *ps) if (p.isObject()) { a->add (p); ++n; }
+                if (f.hasFileExtension ("exb")) proc.loadBankAsync (f);
+                else if (f.existsAsFile()) send (obj ({ { "type", "patchFile" }, { "name", f.getFileNameWithoutExtension() }, { "text", f.loadFileAsString() } }));
             }
-            if (n) { proc.storePatchLibrary (lib); send (obj ({ { "type", "toast" }, { "text", "Added " + juce::String (n) + " patch" + (n > 1 ? "es." : ".") } })); }
-            else if (fc.getResults().size()) send (obj ({ { "type", "toast" }, { "text", "No Xtreme Lab patches in that file." } }));
         });
     }
-    else if (type == "patchExport") {
-        chooser = std::make_unique<juce::FileChooser> ("Save patches", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Xtreme Lab patches.exwp"), "*.exwp");
-        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc) {
-            auto f = fc.getResult(); if (f == juce::File()) return;
-            auto out = obj ({ { "format", "ex-workbench-patch" }, { "version", 1 }, { "patches", proc.patchLibrary() } });
-            f.withFileExtension (".exwp").replaceWithText (juce::JSON::toString (out));
-            send (obj ({ { "type", "toast" }, { "text", "Saved " + f.withFileExtension (".exwp").getFileName() } }));
-        });
+    else if (type == "loadRecent") { juce::File f (proc.userSettings().getValue ("recentBank")); if (f.existsAsFile()) proc.loadBankAsync (f); }
+    else if (type == "forget") { proc.userSettings().removeValue ("recentBank"); proc.userSettings().saveIfNeeded(); }
+    else if (type == "lsSet") { auto o = lsGet(); o.getDynamicObject()->setProperty (m["k"].toString(), m["v"].toString()); lsPut (o); }
+    else if (type == "lsDel") { auto o = lsGet(); o.getDynamicObject()->removeProperty (m["k"].toString()); lsPut (o); }
+    else if (type == "patchesStore") proc.storePatchLibrary (m["patches"]);
+    else if (type == "saveFile") {
+        // a file the page made (WAV, ZIP, SFZ bank, patches), arriving in base64 pieces; the last one asks where to save it
+        if ((int) m["i"] == 0) { saveBuf.reset(); saveName = m["name"].toString(); }
+        juce::MemoryOutputStream mo (saveBuf, true); juce::Base64::convertFromBase64 (mo, m["chunk"].toString()); mo.flush();
+        if ((int) m["i"] == (int) m["n"] - 1) {
+            auto dir = juce::File::getSpecialLocation (juce::File::userDesktopDirectory);
+            auto ext = saveName.fromLastOccurrenceOf (".", false, false);
+            chooser = std::make_unique<juce::FileChooser> ("Save " + saveName, dir.getChildFile (saveName), ext.isNotEmpty() ? "*." + ext : "*");
+            chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc) {
+                auto f = fc.getResult(); if (f == juce::File()) return;
+                if (f.replaceWithData (saveBuf.getData(), saveBuf.getSize())) send (obj ({ { "type", "toast" }, { "text", "Saved " + f.getFileName() } }));
+                else send (obj ({ { "type", "toast" }, { "text", "Couldn’t save " + f.getFileName() } }));
+                saveBuf.reset();
+            });
+        }
     }
-    else if (type == "note") proc.queueNote ((int) m["note"], (int) m["vel"]);
-    else if (type == "bend") proc.queueBend ((int) m["value"]);
-    else if (type == "cc") proc.queueCC ((int) m["cc"], (int) m["value"]);
-    else if (type == "learn") proc.startLearn ((int) m["index"]);
-    else if (type == "defcc") { for (int i = 0; i < 16; ++i) proc.settings.apCC[(size_t) i] = AP_DEFAULT_CC[i]; sendState (false); }
-    else if (type == "fav") {
-        auto favs = favourites(); auto name = m["name"].toString();
-        if (favs.contains (name)) favs.removeString (name); else favs.add (name);
-        favs.removeEmptyStrings(); proc.userSettings().setValue ("favourites", favs.joinIntoString ("\n")); proc.userSettings().saveIfNeeded();
-        sendState (false);
-    }
-    juce::ignoreUnused (AP_LETTERS);
 }
