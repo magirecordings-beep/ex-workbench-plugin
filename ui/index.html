@@ -5304,7 +5304,8 @@ function engineSnapshot() {
     filt: { type: fState.type, freq: fState.freq, res: fState.res, env: fState.env, decay: fState.decay, usePreset: !!fState.usePreset },
     pOfs: fState.pOfs || P_OFS(), envSource: envState.source, env: envState.env, lfos: lfoState, fgs: fgState,
     P: { tune: P.tune.v, bend: P.bend.v, bendp: P.bendp.v, velsens: P.velsens.v, loop: P.loop.v, envscale: P.envscale.v, pmod: P.pmod.v },
-    sendA: fxState.send.a, sendB: fxState.send.b
+    sendA: fxState.send.a, sendB: fxState.send.b,
+    edit: { layer: state.layerIdx, lfo: lfoIdx, fg: fgIdx }
   };
   if (pt) {
     s.mf = pt.mfilter || newMaster();
@@ -5417,6 +5418,7 @@ savePatches = async (list, suggested) => {
   toast(list.length > 1 ? `Saved ${list.length} patches to My patches.` : `Saved “${list[0].name}” to My patches.`);
   return true;
 };
+document.addEventListener('click', e => { const b = e.target.closest?.('[data-learn]'); if (b) setTimeout(() => toNative({ type: 'learn', index: learnIdx }), 0); });
 document.addEventListener('click', e => {
   const del = e.target.closest?.('#patch-del');
   if (del && del.textContent === 'Confirm delete') { const pt = curPatch(); if (pt) { savedLib = savedLib.filter(p => p.name !== pt.name); toNative({ type: 'patchesStore', patches: savedLib }); } }
@@ -5478,6 +5480,7 @@ async function onNative(m) {
     }
     else if (m.status && /not found/i.test(m.status)) toast(m.status + '. Press Open bank to find it.');
     $('#btn-forget').hidden = !m.bank && !m.recent;
+    if (m.hostParams) onHostParams(m.hostParams);
     syncAll();
   } else if (m.type === 'bank') {
     const keep = uiSnapshot();
@@ -5496,11 +5499,80 @@ async function onNative(m) {
     if ('loading' in m) { if (m.loading) progress(m.status || 'Loading…', m.progress, 1); else progress(null); if (!m.loading && m.status && /^(Couldn|No |Not an|Bank not)/.test(m.status)) toast(m.status); }
     if (perf.arp !== 'off') { const h = $('#arp-held'); if (h) h.textContent = m.arp ? m.arp + ' key' + (m.arp > 1 ? 's' : '') + ' held' : 'hold some keys'; }
     if (m.select) { const i = state.presets.findIndex(p => p.name === m.select); if (i >= 0 && !(state.current?.type === 'preset' && state.current.key === i)) { state.tab = 'pre'; await selectPreset(i); renderList(); revealCurrent?.(); } }
+  } else if (m.type === 'hostParams') { onHostParams(m.values || {});
+  } else if (m.type === 'learned') { if (learnIdx === m.index) learnCc(m.cc);
   } else if (m.type === 'patchFile') {
     const n0 = state.patches.length, n = loadPatchJSON(m.text, m.name);
     if (n) { state.tab = 'pat'; renderList(); selectPatch(n0); toast(`Opened ${n} patch${n > 1 ? 'es' : ''}.`); } else toast('That file isn’t an Xtreme Lab patch.');
   } else if (m.type === 'toast') toast(m.text);
 }
+// ---------- panel knobs as host parameters (Ableton macros, automation, Configure) ----------
+// each acts on what its card is editing (the selected layer, LFO, function generator), in the card's own units
+const id1 = v => v;
+const PNL = {
+  pFiltFreq: ['filt-freq', id1, id1], pFiltRes: ['filt-res', id1, id1], pFiltEnv: ['filt-env', id1, id1], pFiltDecay: ['filt-decay', id1, id1],
+  pEnvA: ['env-a', envU, envS], pEnvD: ['env-d', envU, envS], pEnvS: ['env-s', id1, id1], pEnvR: ['env-r', envU, envS], pVel: ['env-vel', id1, id1], pEnvTime: ['env-time', id1, id1],
+  pLfoRate: ['lfo-rate', uFromRate, rateFromU], pLfoDelay: ['lfo-delay', id1, id1], pLfoPitch: ['lfo-pitch', id1, id1], pLfoFilter: ['lfo-filter', id1, id1], pLfoVol: ['lfo-vol', id1, id1], pLfoPan: ['lfo-pan', id1, id1],
+  pFgRate: ['fg-rate', FGR.from, FGR.to], pFgSteps: ['fg-end', id1, id1], pFgPitch: ['fg-pitch', id1, id1], pFgFilter: ['fg-filter', id1, id1], pFgVol: ['fg-vol', id1, id1], pFgPan: ['fg-pan', id1, id1],
+  pLyVol: ['ly-vol', id1, id1], pLyPan: ['ly-pan', id1, id1], pLyCoarse: ['ly-coarse', id1, id1], pLyFine: ['ly-fine', id1, id1],
+  pMfFreq: ['mf-freq', id1, id1], pMfRes: ['mf-res', id1, id1], pMfRate: ['mf-rate', uFromRate, rateFromU], pMfDepth: ['mf-depth', id1, id1],
+  pTune: ['p-tune', id1, id1], pBend: ['p-bend', id1, id1]
+};
+const PNL_BY_INPUT = Object.fromEntries(Object.entries(PNL).map(([k, [inp]]) => [inp, k]));
+let hostApplying = false;
+document.addEventListener('input', e => {
+  if (hostApplying) return;
+  const t = e.target; if (!t || !t.id) return;
+  const pid = PNL_BY_INPUT[t.id];
+  if (pid) { const v = PNL[pid][2](parseFloat(t.value)); if (isFinite(v)) toNative({ type: 'param', id: pid, value: v }); return; }
+  // the Controllers card: knobs A-P are host parameters too
+  const k = t.dataset?.ctl; if (k != null) { const i = MIDI_AP.indexOf(+k); if (i >= 0) toNative({ type: 'param', id: 'ctl' + 'ABCDEFGHIJKLMNOP'[i], value: Math.round(parseFloat(t.value)) }); }
+}, true);
+function applyPanel(pid, v) {
+  const [inpId, toSlider] = PNL[pid]; let inp = document.getElementById(inpId); if (!inp) return;
+  if (inp.disabled && inpId.startsWith('filt-') && curLayer()) { filtEdit(() => {}); inp = document.getElementById(inpId); }   // a layer on its preset's filter gets its own copy
+  if (inp.disabled) return;
+  const sv = toSlider(v); if (!isFinite(sv)) return;
+  hostApplying = true;
+  try { inp.value = String(Math.max(+inp.min, Math.min(+inp.max, sv))); inp.dispatchEvent(new Event('input', { bubbles: true })); }
+  finally { hostApplying = false; }
+}
+// the host moved a parameter the page shows elsewhere (effects, performance, master)
+const CH = { fxaType: ['classic', 'room', 'hall', 'plate', 'ambience'], fxbType: ['chorus', 'flanger', 'phaser', 'delay', 'drive'], keys: ['preset', 'poly', 'mono', 'legato'], glideMode: ['preset', 'off', 'custom'],
+  arpMode: ['off', 'on', 'latch'], arpPattern: ['up', 'down', 'updown', 'downup', 'played', 'random', 'chord'], arpRate: ['1/4', '1/8', '1/8T', '1/16', '1/16T', '1/32'], dlMode: ['repitch', 'fade', 'jump'],
+  phShape: ['sine', 'triangle', 'square', 'saw', 'env'], drStyle: ['A', 'E', 'N', 'T', 'P'] };
+function hostSet(id, v) {
+  const A = fxState.a, B = fxState.b, X = B.x || {}, D = X.drive || {}, F = X.flanger || {}, H = X.phaser || {}, E = fxState.eq, C = fxState.color, bo = v > .5, c = l => l[Math.round(v)] ?? l[0];
+  const set = {
+    master: () => setMaster(v), sendA: () => fxState.send.a = v, sendB: () => fxState.send.b = v,
+    keys: () => perf.keys = c(CH.keys), glideMode: () => perf.glide = c(CH.glideMode), glideMs: () => perf.glideMs = v,
+    arpMode: () => perf.arp = c(CH.arpMode), arpPattern: () => perf.pattern = c(CH.arpPattern), arpRate: () => perf.rate = c(CH.arpRate), arpOct: () => perf.oct = Math.round(v),
+    arpGate: () => perf.gate = v, arpSwing: () => perf.swing = v, arpSync: () => perf.sync = v < .5 ? 'clock' : 'int', arpTempo: () => perf.tempo = v,
+    colOn: () => C.on = bo, colMono: () => C.mono = bo, colWarmth: () => C.warmth = v, colWeight: () => C.weight = v, colSub: () => C.sub = v, colSmooth: () => C.smooth = v,
+    fxaOn: () => A.on = bo, fxaType: () => A.type = c(CH.fxaType), fxaSize: () => A.size = v, fxaDecay: () => A.decay = v, fxaPre: () => A.pre = v, fxaDamp: () => A.damp = v, fxaWidth: () => A.width = v, fxaTone: () => A.tone = v, fxaRet: () => A.ret = v,
+    fxbOn: () => B.on = bo, fxbType: () => B.type = c(CH.fxbType), fxbIns: () => B.insert = bo, fxbRet: () => B.ret = v, chRate: () => B.rate = v, chDepth: () => B.depth = v,
+    dlSync: () => B.dsync = bo, dlDivL: () => B.divL = [1, 2, 3, 4, 5, 6, 8, 16][Math.round(v)] ?? 3, dlDivR: () => B.divR = [1, 2, 3, 4, 5, 6, 8, 16][Math.round(v)] ?? 4, dlOffL: () => B.offL = v, dlOffR: () => B.offR = v,
+    dlMsL: () => B.time = v, dlMsR: () => B.msR = v, dlLink: () => B.link = bo, dlPP: () => B.pp = bo, dlFreeze: () => B.freeze = bo, dlFb: () => B.fb = v, dlFilt: () => B.filt = bo, dlFreq: () => B.ffreq = v, dlWidth: () => B.fwidth = v,
+    dlMRate: () => B.mrate = v, dlMFilt: () => B.mfilt = v, dlMTime: () => B.mtime = v, dlMode: () => B.dmode = c(CH.dlMode),
+    flSync: () => F.sync = bo, flBeats: () => F.beats = [.5, 1, 2, 4, 8, 16, 32, 64][Math.round(v)] ?? 16, flRate: () => F.rate = v, flDepth: () => F.depth = v, flFb: () => F.fb = v, flSpread: () => F.spread = v, flMix: () => F.mix = v,
+    phStages: () => H.stages = [4, 6, 8, 12, 16, 24][Math.round(v)] ?? 8, phFreq: () => H.freq = v, phDepth: () => H.depth = v, phShape: () => H.shape = c(CH.phShape), phSync: () => H.sync = bo,
+    phBeats: () => H.beats = [.25, .5, 1, 2, 4, 8, 16][Math.round(v)] ?? 4, phRate: () => H.rate = v, phRes: () => H.res = v, phWidth: () => H.width = v, phMix: () => H.mix = v, phAnalog: () => H.analog = bo,
+    drStyle: () => D.style = c(CH.drStyle), drDrive: () => D.drive = v, drPunish: () => D.punish = bo, drAuto: () => D.auto = bo, drThump: () => D.thump = bo, drSteep: () => D.steep = bo,
+    drLowcut: () => D.lowcut = v <= 10.5 ? 0 : v, drTone: () => D.tone = v, drHighcut: () => D.highcut = v >= 19900 ? 0 : v, drMix: () => D.mix = v, drOut: () => D.out = v,
+    eqLow: () => E.low = v, eqMid: () => E.mid = v, eqMidHz: () => E.midHz = v, eqHigh: () => E.high = v
+  }[id];
+  if (!set) return false;
+  set(); sentParams[id] = paramMap()[id]; return true;
+}
+function onHostParams(vals) {
+  let fx = false, pf = false;
+  for (const [id, v] of Object.entries(vals)) {
+    if (PNL[id]) { applyPanel(id, v); continue; }
+    if (hostSet(id, v)) { if (/^(keys|glide|arp)/.test(id)) pf = true; else fx = true; }
+  }
+  if (fx) { fxRender(); fxChanged(); } if (pf) { perfRender(); if (curPatch()) curPatch().perf = { ...perf }; }
+}
+
 function syncAll() { syncEngine(); syncKnobs(); syncParams(); }
 function bridgeStart() {
   if (!PLUGIN) { toast('Open this page in the Xtreme Lab plugin.'); return; }

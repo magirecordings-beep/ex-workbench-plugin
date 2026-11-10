@@ -50,7 +50,25 @@ exw::FgDef fgFrom (const juce::var& f) {
     d.pitch = (float) num (f["pitch"], 0); d.filter = (float) num (f["filter"], 0); d.vol = (float) num (f["vol"], 0); d.pan = (float) num (f["pan"], 0);
     return d;
 }
+
+// the panel's knobs as host parameters, in the cards' own units; each acts on what its card is editing
+struct PanelDef { const char* id; const char* name; float lo, hi, def, skew; const char* unit; };
+const PanelDef PANEL[] = {
+    { "pFiltFreq", "Filter cutoff", 0, 100, 70, 0, "%" }, { "pFiltRes", "Filter resonance", 0, 100, 20, 0, "%" },
+    { "pFiltEnv", "Filter env amount", -100, 100, 0, 0, "%" }, { "pFiltDecay", "Filter env decay", .01f, 8, .8f, 1, "s" },
+    { "pEnvA", "Amp attack", 0, 30, .002f, .5f, "s" }, { "pEnvD", "Amp decay", 0, 30, .6f, .8f, "s" }, { "pEnvS", "Amp sustain", 0, 100, 100, 0, "" },
+    { "pEnvR", "Amp release", 0, 30, .35f, .8f, "s" }, { "pVel", "Velocity", 0, 1, .7f, 0, "" }, { "pEnvTime", "Preset envelope time", .25f, 4, 1, 1, "x" },
+    { "pLfoRate", "LFO rate", .05f, 20, 5, 1, "Hz" }, { "pLfoDelay", "LFO delay", 0, 5, 0, 0, "s" }, { "pLfoPitch", "LFO to pitch", -100, 100, 0, 0, "%" },
+    { "pLfoFilter", "LFO to filter", -100, 100, 0, 0, "%" }, { "pLfoVol", "LFO to volume", 0, 100, 0, 0, "%" }, { "pLfoPan", "LFO to pan", -100, 100, 0, 0, "%" },
+    { "pFgRate", "FG rate", .1f, 20, 6, 2, "Hz" }, { "pFgSteps", "FG steps", 1, 64, 8, 0, "" }, { "pFgPitch", "FG to pitch", -24, 24, 0, 0, "st" },
+    { "pFgFilter", "FG to filter", -100, 100, 0, 0, "%" }, { "pFgVol", "FG to volume", 0, 100, 0, 0, "%" }, { "pFgPan", "FG to pan", -100, 100, 0, 0, "%" },
+    { "pLyVol", "Layer volume", -48, 6, 0, 0, "dB" }, { "pLyPan", "Layer pan", -100, 100, 0, 0, "" }, { "pLyCoarse", "Layer coarse", -36, 36, 0, 0, "st" }, { "pLyFine", "Layer fine", -100, 100, 0, 0, "ct" },
+    { "pMfFreq", "Master filter cutoff", 0, 100, 70, 0, "%" }, { "pMfRes", "Master filter resonance", 0, 100, 20, 0, "%" },
+    { "pMfRate", "Master filter LFO rate", .05f, 20, .2f, 1, "Hz" }, { "pMfDepth", "Master filter LFO depth", 0, 100, 0, 0, "%" },
+    { "pTune", "Fine tune", -100, 100, 0, 0, "ct" }, { "pBend", "Bend range", 0, 24, 2, 0, "st" },
+};
 }
+bool ExwProcessor::isPanelParam (const juce::String& id) { for (auto& d : PANEL) if (id == d.id) return true; return false; }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
     using namespace juce;
@@ -84,6 +102,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
         else { NormalisableRange<float> r (d.lo, d.hi, d.step); if (d.skewCentre > 0) r.setSkewForCentre (d.skewCentre);
                l.add (std::make_unique<AudioParameterFloat> (ParameterID { d.id, 1 }, d.name, r, d.def, AudioParameterFloatAttributes().withLabel (d.unit))); }
     }
+    for (auto& d : PANEL) { NormalisableRange<float> r (d.lo, d.hi, 0); if (d.skew > 0) r.setSkewForCentre (d.skew);
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { d.id, 1 }, d.name, r, d.def, AudioParameterFloatAttributes().withLabel (d.unit))); }
     for (int i = 0; i < 16; ++i)
         l.add (std::make_unique<AudioParameterFloat> (ParameterID { knobId (i), 1 }, juce::String ("Knob ") + AP_LETTERS[i], NormalisableRange<float> (0, 127, 1), 0));
     return l;
@@ -297,12 +317,35 @@ void ExwProcessor::setApCC (const juce::var& list) {
 
 void ExwProcessor::timerCallback() {
     if (int pc = pendingPC.exchange (-1); pc >= 0) selectPreset (pc, true);
+    // panel parameters moved by the host (automation, Ableton macros): the open panel applies them itself,
+    // a closed one is stood in for here so they still change the sound
+    const bool ui = uiActive.load(); bool changed = false;
+    for (auto& d : PANEL) {
+        float v = params.getRawParameterValue (d.id)->load();
+        auto it = lastPanel.find (d.id);
+        if (it == lastPanel.end()) { lastPanel[d.id] = v; continue; }
+        if (it->second == v) continue;
+        it->second = v;
+        if (ui) continue;
+        applyPanel (d.id, v); changed = true;
+        if (! closedChanges) closedChanges = new juce::DynamicObject();
+        closedChanges->setProperty (d.id, v);
+    }
+    if (changed && engineJson.isObject()) setEngineState (engineJson, false, juce::var());
 }
 
 void ExwProcessor::handleMidi (const juce::MidiMessage& m) {
     if (m.isNoteOn()) engine.noteOn (m.getNoteNumber(), m.getVelocity());
     else if (m.isNoteOff()) engine.noteOff (m.getNoteNumber());
-    else if (m.isController()) engine.controller (m.getControllerNumber(), m.getControllerValue());
+    else if (m.isController()) {
+        const int cc = m.getControllerNumber(), k = learnKnob.load();
+        if (k >= 0 && k < 16 && cc != 64 && cc < 120 && cc != 0 && cc != 32) {
+            // MIDI learn: this controller now drives knob k; a knob that had it takes k's old number
+            for (int i = 0; i < 16; ++i) if (i != k && settings.apCC[(size_t) i].load() == cc) settings.apCC[(size_t) i] = settings.apCC[(size_t) k].load();
+            settings.apCC[(size_t) k] = cc; learnKnob = -1; learned = k | (cc << 8);
+        }
+        engine.controller (cc, m.getControllerValue());
+    }
     else if (m.isPitchWheel()) engine.pitchBend (m.getPitchWheelValue());
     else if (m.isChannelPressure()) engine.channelPressure (m.getChannelPressureValue());
     else if (m.isAftertouch()) engine.channelPressure (m.getAfterTouchValue());
@@ -364,6 +407,105 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     midi.clear();
     for (int i = 0; i < 16; ++i) knobVals[(size_t) i] = engine.apKnob (i);
     notes = engine.activeNotes();
+}
+
+juce::var ExwProcessor::takeClosedChanges() { juce::var v (closedChanges.get()); closedChanges = nullptr; return v; }
+
+namespace {
+juce::DynamicObject* dobj (const juce::var& v) { return v.getDynamicObject(); }
+void setp (const juce::var& o, const char* k, double v) { if (auto* d = dobj (o)) d->setProperty (k, v); }
+juce::var child (const juce::var& o, const char* k) {   // o[k], made an object if missing
+    auto* d = dobj (o); if (! d) return {};
+    if (! d->getProperty (k).isObject()) d->setProperty (k, juce::var (new juce::DynamicObject()));
+    return d->getProperty (k);
+}
+const char* emuTypeName (int code) {
+    switch (code) {
+        case 127: return "bypass"; case 0: return "lp4"; case 1: return "lp2"; case 2: return "lp6"; case 8: return "hp2"; case 9: return "hp4";
+        case 16: case 17: return "bp"; case 18: return "notch"; case 32: case 33: case 34: return "eq"; case 64: case 65: return "phaser";
+        case 66: return "mx-phase"; case 72: return "flanger"; case 80: return "mx-ahee"; case 81: return "mx-ooah";
+        default: return code >= 128 ? exw::MORPHS[(code - 128) % exw::NUM_MORPHS].key : "lp2";
+    }
+}
+}
+
+// the first voice of a preset source, as the panel would show it
+juce::var ExwProcessor::presetEnvSec (const juce::var& src, float envscale) const {
+    if (! ctx || src["type"].toString() != "preset") return {};
+    for (auto& p : ctx->bank->presets) if (p.name == src["name"].toString().toStdString()) {
+        if (p.voices.empty() || p.voices[0].envs.empty()) return {};
+        juce::Array<juce::var> a; const auto& e = p.voices[0].envs[0];
+        for (int i = 0; i < 6; ++i) { auto* o = new juce::DynamicObject(); float x = juce::jlimit (0.0f, 1.0f, e.t[i]);
+            o->setProperty ("s", 163.69 * (std::pow (2.0, 11.0 * x) - 1) / 2047.0 * envscale); o->setProperty ("l", e.l[i]); a.add (juce::var (o)); }
+        return a;
+    }
+    return {};
+}
+juce::var ExwProcessor::presetFilt (const juce::var& src) const {
+    auto* o = new juce::DynamicObject(); o->setProperty ("type", "bypass"); o->setProperty ("freq", 70); o->setProperty ("res", 20); o->setProperty ("env", 0); o->setProperty ("decay", .8);
+    if (ctx && src["type"].toString() == "preset") for (auto& p : ctx->bank->presets) if (p.name == src["name"].toString().toStdString()) {
+        if (! p.voices.empty() && p.voices[0].hasFilter) { const auto& v = p.voices[0];
+            o->setProperty ("type", emuTypeName (v.ftype)); o->setProperty ("freq", std::round (v.ffreq * 100)); o->setProperty ("res", std::round (v.fq * 100)); }
+        break;
+    }
+    return juce::var (o);
+}
+
+// what moving a panel knob does to the sound description (the page's own logic, for when it's closed)
+void ExwProcessor::applyPanel (const juce::String& id, float v) {
+    auto& s = engineJson; if (! s.isObject()) return;
+    const bool patch = s["sel"]["type"].toString() == "patch";
+    const int li = juce::jlimit (0, 3, (int) num (s["edit"]["layer"], 0)), lfoI = juce::jlimit (0, 2, (int) num (s["edit"]["lfo"], 0)), fgI = juce::jlimit (0, 2, (int) num (s["edit"]["fg"], 0));
+    juce::var L = patch ? at (s["layers"], li) : juce::var();
+    if (patch && ! L.isObject()) return;
+    auto P = child (s, "P");
+    if (id.startsWith ("pFilt")) {
+        const char* k = id == "pFiltFreq" ? "freq" : id == "pFiltRes" ? "res" : id == "pFiltEnv" ? "env" : "decay";
+        if (patch) {
+            auto f = L["filter"];
+            if (! f.isObject() || f["type"].toString() == "preset") { f = presetFilt (L["src"]); dobj (L)->setProperty ("filter", f); }
+            setp (f, k, v);
+        } else {
+            const bool presetMode = flag (s["filt"]["usePreset"], true) && s["sel"]["type"].toString() == "preset";
+            if (presetMode) setp (child (s, "pOfs"), k, (! strcmp (k, "freq") || ! strcmp (k, "res")) ? (v - 50) * 2 : v);
+            else setp (child (s, "filt"), k, v);
+        }
+    } else if (id == "pEnvA" || id == "pEnvD" || id == "pEnvR" || id == "pEnvS") {
+        juce::var env;
+        if (patch) {
+            if (flag (L["useSrcEnv"], false)) { auto e = presetEnvSec (L["src"], (float) num (P["envscale"], 1)); if (e.isArray()) dobj (L)->setProperty ("env", e); dobj (L)->setProperty ("useSrcEnv", false); }
+            env = L["env"];
+        } else {
+            if (s["envSource"].toString() == "preset") { auto e = presetEnvSec (s["sel"], (float) num (P["envscale"], 1)); if (e.isArray()) dobj (s)->setProperty ("env", e); }
+            dobj (s)->setProperty ("envSource", s["sel"]["type"].toString() == "preset" ? "edited" : "manual");
+            env = s["env"];
+        }
+        auto* a = env.getArray(); if (! a || a->size() < 6) return;
+        auto S = [&] (int i) { return num ((*a)[i]["s"], 0); };
+        if (id == "pEnvS") { setp ((*a)[3], "l", v); if (S (3) == 0) setp ((*a)[2], "l", v); }
+        else { const int i = id == "pEnvA" ? 0 : id == "pEnvD" ? 2 : 4; const double cur = S (i) + S (i + 1);
+               if (cur > 0) { setp ((*a)[i], "s", S (i) * v / cur); setp ((*a)[i + 1], "s", S (i + 1) * v / cur); } else setp ((*a)[i], "s", v); }
+    } else if (id == "pVel") setp (P, "velsens", v);
+    else if (id == "pEnvTime") setp (P, "envscale", v);
+    else if (id == "pTune") setp (P, "tune", std::round (v));
+    else if (id == "pBend") setp (P, "bend", std::round (v));
+    else if (id.startsWith ("pLfo")) {
+        auto lf = at (patch ? L["lfos"] : s["lfos"], lfoI); if (! lf.isObject()) return;
+        const char* k = id == "pLfoRate" ? "rate" : id == "pLfoDelay" ? "delay" : id == "pLfoPitch" ? "pitch" : id == "pLfoFilter" ? "filter" : id == "pLfoVol" ? "vol" : "pan";
+        setp (lf, k, id == "pLfoRate" || id == "pLfoDelay" ? (double) v : std::round (v));
+    } else if (id.startsWith ("pFg")) {
+        auto fg = at (patch ? L["fgs"] : s["fgs"], fgI); if (! fg.isObject()) return;
+        const char* k = id == "pFgRate" ? "rate" : id == "pFgSteps" ? "end" : id == "pFgPitch" ? "pitch" : id == "pFgFilter" ? "filter" : id == "pFgVol" ? "vol" : "pan";
+        setp (fg, k, id == "pFgRate" ? (double) v : std::round (v));
+    } else if (id.startsWith ("pLy")) {
+        if (! patch) return;
+        if (id == "pLyVol") setp (L, "volDb", std::round (v * 2) / 2); else if (id == "pLyPan") setp (L, "pan", std::round (v));
+        else if (id == "pLyCoarse") setp (L, "coarse", std::round (v)); else setp (L, "fine", std::round (v));
+    } else if (id.startsWith ("pMf")) {
+        if (! patch) return;
+        auto mf = child (s, "mf");
+        setp (mf, id == "pMfFreq" ? "freq" : id == "pMfRes" ? "res" : id == "pMfRate" ? "rate" : "depth", v);
+    }
 }
 
 void ExwProcessor::getStateInformation (juce::MemoryBlock& dest) {

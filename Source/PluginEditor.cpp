@@ -38,7 +38,7 @@ ExwEditor::ExwEditor (ExwProcessor& p)
     startTimerHz (25);
 }
 
-ExwEditor::~ExwEditor() { stopTimer(); }
+ExwEditor::~ExwEditor() { stopTimer(); proc.uiActive = false; }
 
 void ExwEditor::resized() { web.setBounds (getLocalBounds()); }
 
@@ -97,11 +97,11 @@ void ExwEditor::sendInit() {
     juce::Array<juce::var> apcc; for (int i = 0; i < 16; ++i) apcc.add (proc.settings.apCC[(size_t) i].load());
     juce::Array<juce::var> knobs; for (int i = 0; i < 16; ++i) { knobs.add (proc.knob (i)); sentKnobs[i] = proc.knob (i); }
     auto* po = new juce::DynamicObject();
-    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) po->setProperty (r->getParameterID(), r->convertFrom0to1 (r->getValue()));
+    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) { float v = r->convertFrom0to1 (r->getValue()); po->setProperty (r->getParameterID(), v); uiKnown[r->getParameterID()] = v; }
     auto recent = juce::File (proc.userSettings().getValue ("recentBank"));
     send (obj ({ { "type", "init" }, { "ui", proc.uiState() }, { "engine", proc.engineState() }, { "ls", lsGet() }, { "patches", proc.patchLibrary() },
                  { "apcc", apcc }, { "knobs", knobs }, { "params", juce::var (po) }, { "bank", bankInfo() }, { "loading", proc.isLoading() }, { "status", proc.bankStatus() },
-                 { "recent", recent.existsAsFile() ? recent.getFullPathName() : juce::String() } }));
+                 { "recent", recent.existsAsFile() ? recent.getFullPathName() : juce::String() }, { "hostParams", proc.takeClosedChanges() } }));
     sentBankVer = proc.bankVersion();
 }
 
@@ -118,11 +118,22 @@ void ExwEditor::timerCallback() {
     if (proc.isLoading() || sentLoading || proc.bankStatus() != sentStatus) { o->setProperty ("loading", proc.isLoading()); o->setProperty ("progress", proc.loadProgress()); o->setProperty ("status", proc.bankStatus()); sentStatus = proc.bankStatus(); sentLoading = proc.isLoading(); }
     auto sel = proc.takeSelectRequest(); if (sel.isNotEmpty()) o->setProperty ("select", sel);
     send (msg);
+    // parameters the host moved (automation, Ableton macros): the panel shows and applies them
+    auto* hp = new juce::DynamicObject(); bool any = false;
+    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) {
+        auto id = r->getParameterID(); if (id.startsWith ("ctl")) continue;   // knobs A-P arrive with the status
+        float v = r->convertFrom0to1 (r->getValue());
+        auto it = uiKnown.find (id); if (it != uiKnown.end() && std::abs (it->second - v) < 1e-6f) continue;
+        uiKnown[id] = v; hp->setProperty (id, v); any = true;
+    }
+    if (any) send (obj ({ { "type", "hostParams" }, { "values", juce::var (hp) } })); else delete hp;
+    int lk, lcc; if (proc.takeLearned (lk, lcc)) send (obj ({ { "type", "learned" }, { "index", lk }, { "cc", lcc } }));
 }
 
 void ExwEditor::handle (const juce::var& m) {
     auto type = m["type"].toString();
-    if (type == "ready") { ready = true; sendInit(); }
+    if (type == "ready") { ready = true; proc.uiActive = true; sendInit(); }
+    else if (type == "learn") proc.startLearn ((int) m["index"]);
     else if (type == "engine") proc.setEngineState (m["state"], (bool) m["reset"], m["ic"]);
     else if (type == "ui") proc.setUiState (m["state"]);
     else if (type == "knobs") proc.setKnobs (m["values"]);
@@ -131,6 +142,7 @@ void ExwEditor::handle (const juce::var& m) {
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (proc.params.getParameter (m["id"].toString()))) {
             float v = (float) (double) m["value"];
             if (std::abs (r->convertFrom0to1 (r->getValue()) - v) > 1e-6f) { r->beginChangeGesture(); r->setValueNotifyingHost (r->convertTo0to1 (v)); r->endChangeGesture(); }
+            uiKnown[r->getParameterID()] = r->convertFrom0to1 (r->getValue());
         }
     }
     else if (type == "note") { int n = juce::jlimit (0, 127, (int) m["note"]), v = (int) m["vel"]; proc.queue (v > 0 ? juce::MidiMessage::noteOn (1, n, (juce::uint8) juce::jlimit (1, 127, v)) : juce::MidiMessage::noteOff (1, n)); }

@@ -44,6 +44,13 @@ public:
     juce::var uiState() const { return uiJson; }
     void selectPreset (int index, bool tellUi);   // a host or MIDI program change, or from the panel
     juce::String takeSelectRequest() { auto s = selectRequest; selectRequest = {}; return s; }
+    // MIDI learn for knobs A-P (the panel arms it; the next controller from the host is taken)
+    void startLearn (int knob) { learnKnob.store (knob); }
+    bool takeLearned (int& knob, int& cc) { int v = learned.exchange (-1); if (v < 0) return false; knob = v & 255; cc = v >> 8; return true; }
+    // the panel is open and applies the panel parameters itself; while it's closed the processor does
+    std::atomic<bool> uiActive { false };
+    juce::var takeClosedChanges();   // panel parameters the host moved while the panel was closed
+    static bool isPanelParam (const juce::String& id);
     void setKnobs (const juce::var& values);      // A-P from the panel (0..1)
     void setApCC (const juce::var& list);
     // on-screen keys, pitch and mod wheels
@@ -79,7 +86,11 @@ private:
     std::shared_ptr<const exw::Bank> bank, pendingBank;
     std::shared_ptr<BankCtx> ctx;   // message thread
     std::atomic<bool> bankPending { false }, loading { false };
-    std::atomic<int> arpHeld { 0 }, bankVer { 0 }, notes { 0 }, pendingPC { -1 };
+    std::atomic<int> arpHeld { 0 }, bankVer { 0 }, notes { 0 }, pendingPC { -1 }, learnKnob { -1 }, learned { -1 };
+    std::map<juce::String, float> lastPanel; juce::DynamicObject::Ptr closedChanges; bool panelDirty = false;
+    void applyPanel (const juce::String& id, float v);
+    juce::var presetEnvSec (const juce::var& src, float envscale) const;
+    juce::var presetFilt (const juce::var& src) const;
     std::atomic<float> progress { 0 };
     std::array<std::atomic<float>, 2> peaks;
     juce::String status;

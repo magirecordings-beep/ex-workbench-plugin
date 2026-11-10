@@ -51,6 +51,21 @@ int main (int argc, char** argv) {
     { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::programChange (1, 9), 0); block (proc, m); pump (200); }
     printf ("after MIDI program change 10: %d '%s'\n", p->getCurrentProgram(), p->getProgramName (p->getCurrentProgram()).toRawUTF8());
     play ("  plays it", { 60 });
+    { // the panel closed: Ableton macros on panel parameters still change the sound
+        auto setp = [&] (const char* id, float v) { auto* r = dynamic_cast<juce::RangedAudioParameter*> (proc->params.getParameter (id)); r->setValueNotifyingHost (r->convertTo0to1 (v)); };
+        proc->setEngineState (state (R"({"type":"preset","name":"raw:Basic Saw","bank":"Xtreme_Lead-1.exb"})", R"(,"edit":{"layer":0,"lfo":0,"fg":0})"), true, juce::var()); pump (100);
+        setp ("pFiltFreq", 20); setp ("pEnvR", 2.5f); pump (300);
+        auto s = proc->engineState();
+        printf ("closed panel: cutoff shift %.0f (want -60), envelope %s release %.2f s\n", (double) s["pOfs"]["freq"], s["envSource"].toString().toRawUTF8(),
+                (double) s["env"][4]["s"] + (double) s["env"][5]["s"]);
+        play ("  plays darker, longer release", { 48 });
+        // knob A from the host
+        setp ("ctlA", 100); { juce::MidiBuffer m; block (proc, m); block (proc, m); }
+        printf ("host knob A 100 -> engine knob %.3f\n", proc->knob (0));
+        // MIDI learn: knob C takes CC 30
+        proc->startLearn (2); { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::controllerEvent (1, 30, 64), 0); block (proc, m); }
+        int k, cc; bool got = proc->takeLearned (k, cc); printf ("learned: %s knob %d cc %d, apCC[2]=%d, knob C now %.3f\n", got ? "yes" : "no", k, cc, proc->settings.apCC[2].load(), proc->knob (2));
+    }
     // save and restore into a new instance
     juce::MemoryBlock mb; p->getStateInformation (mb);
     std::unique_ptr<juce::AudioProcessor> p2 (createPluginFilter()); auto* proc2 = dynamic_cast<ExwProcessor*> (p2.get());

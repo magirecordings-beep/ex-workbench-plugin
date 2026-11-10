@@ -18,6 +18,7 @@ private:
     bool ready = false;
     int sentBankVer = -1; float sentKnobs[16] {}; juce::String sentStatus; bool sentLoading = false;
     juce::MemoryBlock saveBuf; juce::String saveName;
+    std::map<juce::String, float> uiKnown;   // parameter values the panel already has
 
     std::optional<juce::WebBrowserComponent::Resource> resource (const juce::String& url);
     void handle (const juce::var& msg);
