@@ -13,7 +13,7 @@ on:
 
 jobs:
   mac:
-    runs-on: macos-latest
+    runs-on: macos-15-intel   # universal build (arm64 + x86_64); Intel runners queue less
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
