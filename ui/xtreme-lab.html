@@ -308,7 +308,11 @@ input[type=search],input[type=text]{background:#121316;color:var(--ink);border:1
 .kgrid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(84px,1fr))!important;gap:14px 8px!important;align-items:start}
 .kgrid > :not(.kcell):not(.fxr):not(.krow){grid-column:1/-1}
 .kgrid .fxr{display:contents}
-#fxb-x.kgrid{grid-column:1/-1!important} /* the drive / flanger / phaser panel spans the FX B card */
+#fxb-x.kgrid{grid-column:1/-1!important}
+.kmenu{position:fixed;z-index:9999;min-width:200px;background:#15171b;border:1px solid #3a3f47;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px;font-size:13px}
+.kmenu-h{padding:5px 9px 6px;color:#8b93a0;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid #2a2e35;margin-bottom:3px}
+.kmenu button{display:block;width:100%;text-align:left;background:none;border:0;color:#e6e9ee;padding:6px 9px;border-radius:4px;cursor:pointer;font:inherit}
+.kmenu button:hover,.kmenu button:focus-visible{background:#1f5bc4;color:#fff} /* the drive / flanger / phaser panel spans the FX B card */
 .kcell{display:grid;justify-items:center;gap:3px;text-align:center;min-width:0}
 .kcell > label,.kcell > .label,.kcell > .pf-l,.kcell > .ctl-name{font:500 11px/1.2 var(--f-body)!important;letter-spacing:.06em;text-transform:uppercase;color:var(--env-muted)!important;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kcell > .ctl-name{display:flex;flex-direction:column;align-items:center;gap:2px}
@@ -4267,7 +4271,7 @@ function knobify(inp) {
     if (out) kn.setAttribute('aria-valuetext', out.textContent);
   };
   let drag = null;
-  kn.addEventListener('pointerdown', e => { if (inp.disabled) return; e.preventDefault(); kn.focus(); kn.setPointerCapture(e.pointerId); drag = { y: e.clientY, x: e.clientX, v: parseFloat(valDesc.get.call(inp)) }; });
+  kn.addEventListener('pointerdown', e => { if (inp.disabled || e.button !== 0) return; /* right-click opens the knob menu */ e.preventDefault(); kn.focus(); kn.setPointerCapture(e.pointerId); drag = { y: e.clientY, x: e.clientX, v: parseFloat(valDesc.get.call(inp)) }; });
   kn.addEventListener('pointermove', e => {
     if (!drag) return; const { min, max } = num();
     const d = (drag.y - e.clientY) + (e.clientX - drag.x) * .5, fine = e.shiftKey ? .15 : 1;
@@ -4531,6 +4535,33 @@ document.addEventListener('click', e => {
   if (b) { const i = +b.dataset.learn; learnIdx = learnIdx === i ? -1 : i; ctlRender(); return; }
   if (e.target.id === 'ctl-defcc') { AP_CC = AP_DEFAULT_CC.slice(); learnIdx = -1; saveApCc(); ctlRender(); toast('Controllers back on X3’s default CC numbers (21–28, 70–73, 91, 93, 82, 83).'); }
 });
+/* ---------- right-click on a knob: a small menu (reset, and MIDI learn for the Controllers card) ---------- */
+const kmenu = document.createElement('div'); kmenu.className = 'kmenu'; kmenu.hidden = true; kmenu.setAttribute('role', 'menu');
+document.body.appendChild(kmenu);
+const kmenuClose = () => { kmenu.hidden = true; kmenu.innerHTML = ''; };
+document.addEventListener('contextmenu', e => {
+  const kn = e.target.closest?.('.kn'); if (!kn) return;
+  e.preventDefault();
+  const inp = kn.closest('.kcell')?.querySelector('input[type=range]'); if (!inp) return;
+  const items = [];
+  const k = inp.dataset.ctl != null ? +inp.dataset.ctl : null, i = k != null ? MIDI_AP.indexOf(k) : -1;
+  if (i >= 0) {
+    const cc = AP_CC[i];
+    items.push([learnIdx === i ? 'Cancel MIDI learn' : 'MIDI learn… (turn a knob on your keyboard)', () => document.querySelector(`[data-learn="${i}"]`)?.click()]);
+    if (cc !== AP_DEFAULT_CC[i]) items.push([`Use default CC ${AP_DEFAULT_CC[i]}`, () => { const o = AP_CC.indexOf(AP_DEFAULT_CC[i]); if (o >= 0 && o !== i) AP_CC[o] = cc; AP_CC[i] = AP_DEFAULT_CC[i]; saveApCc(); ctlRender(); toast(`${AP_LETTER[i]} follows CC ${AP_DEFAULT_CC[i]} again.`); }]);
+    if (cc >= 0) items.push(['No MIDI CC', () => { AP_CC[i] = -1; saveApCc(); ctlRender(); }]);
+    if (ctlDef?.ic) items.push(['Back to the preset’s start', () => { inp.value = String(ctlDef.ic[i] ?? 0); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true })); }]);
+  }
+  items.push(['Reset to default', () => kn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))]);
+  kmenu.innerHTML = `<div class="kmenu-h">${esc((kn.getAttribute('aria-label') || '').replace(/[\s·]*(CC\s?\d+|off)\s*$/i, ''))}${i >= 0 ? ` · ${AP_CC[i] < 0 ? 'no CC' : 'CC ' + AP_CC[i]}` : ''}</div>` + items.map((it, n) => `<button type="button" role="menuitem" data-km="${n}">${esc(it[0])}</button>`).join('');
+  kmenu._items = items; kmenu.hidden = false;
+  const r = kmenu.getBoundingClientRect();
+  let x = e.clientX, y = e.clientY; if (x + r.width > innerWidth) x = innerWidth - r.width - 4; if (y + r.height > innerHeight) y = innerHeight - r.height - 4;
+  kmenu.style.left = x + 'px'; kmenu.style.top = y + 'px';
+});
+kmenu.addEventListener('click', e => { const b = e.target.closest('[data-km]'); if (!b) return; const f = kmenu._items?.[+b.dataset.km]?.[1]; kmenuClose(); f?.(); });
+document.addEventListener('pointerdown', e => { if (!kmenu.hidden && !kmenu.contains(e.target)) kmenuClose(); }, true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !kmenu.hidden) kmenuClose(); });
 document.addEventListener('click', e => { if (e.target.id === 'ctl-reset') { presetCtrls(ctlDef); toast('Controllers back to the preset’s starting positions.'); } });
 // sustain pedal: notes released while it is down keep sounding until it comes up
 const sus = { on: false, held: new Set(), pending: new Set() };

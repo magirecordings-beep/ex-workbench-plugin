@@ -260,13 +260,10 @@ addEventListener('drop', e => {
 
 // ---------- right-click ----------
 // the web view's own menu (Reload, Back, Inspect...) has no place in a plugin: Reload would restart the panel.
-// Right-click on a Controllers knob starts MIDI learn for it instead; text boxes keep their copy/paste menu.
+// Right-click on a knob opens the panel's knob menu instead (MIDI learn, reset); text boxes keep copy/paste.
 addEventListener('contextmenu', e => {
-  const t = e.target;
-  if (t.closest?.('input[type="text"], input[type="search"], input:not([type]), textarea')) return;
+  if (e.target.closest?.('input[type="text"], input[type="search"], input:not([type]), textarea, [contenteditable]')) return;
   e.preventDefault();
-  const learn = t.closest?.('.kcell')?.querySelector('[data-learn]');
-  if (learn) learn.click();
 }, true);
 // keyboard reload / back shortcuts do nothing either
 addEventListener('keydown', e => {
