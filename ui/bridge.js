@@ -258,6 +258,22 @@ addEventListener('drop', e => {
   if (files.some(f => /\.(exb|ebl|e4b|zip)$/i.test(f.name))) { e.preventDefault(); e.stopImmediatePropagation(); toast('Use Open bank to load a bank in the plugin. Its SamplePool comes with it.'); }
 }, true);
 
+// ---------- right-click ----------
+// the web view's own menu (Reload, Back, Inspect...) has no place in a plugin: Reload would restart the panel.
+// Right-click on a Controllers knob starts MIDI learn for it instead; text boxes keep their copy/paste menu.
+addEventListener('contextmenu', e => {
+  const t = e.target;
+  if (t.closest?.('input[type="text"], input[type="search"], input:not([type]), textarea')) return;
+  e.preventDefault();
+  const learn = t.closest?.('.kcell')?.querySelector('[data-learn]');
+  if (learn) learn.click();
+}, true);
+// keyboard reload / back shortcuts do nothing either
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'f5' || ((e.ctrlKey || e.metaKey) && (k === 'r' || k === 'p')) || (e.altKey && (k === 'arrowleft' || k === 'arrowright'))) e.preventDefault();
+}, true);
+
 // ---------- what's different in a plugin window ----------
 function pluginFace() {
   $('#btn-sound').hidden = true; $('#midi-sel').hidden = true;
