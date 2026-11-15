@@ -53,6 +53,10 @@ std::optional<juce::WebBrowserComponent::Resource> ExwEditor::resource (const ju
         return bytes (html.toRawUTF8(), html.getNumBytesAsUTF8(), "text/html");
     }
     auto b = proc.currentBank();
+    if (path == "/x/init.json") {
+        auto j = juce::JSON::toString (initPayload(), true);
+        return bytes (j.toRawUTF8(), j.getNumBytesAsUTF8(), "application/json");
+    }
     if (path == "/x/exb") {
         juce::MemoryBlock mb; if (! b || ! juce::File (juce::String::fromUTF8 (b->path.c_str())).loadFileAsData (mb)) return std::nullopt;
         return bytes (mb.getData(), mb.getSize(), "application/octet-stream");
@@ -93,17 +97,22 @@ juce::var ExwEditor::bankInfo() const {
 juce::var ExwEditor::lsGet() { auto v = juce::JSON::parse (proc.userSettings().getValue ("ls")); return v.isObject() ? v : juce::var (new juce::DynamicObject()); }
 void ExwEditor::lsPut (const juce::var& o) { proc.userSettings().setValue ("ls", juce::JSON::toString (o, true)); proc.userSettings().saveIfNeeded(); }
 
-void ExwEditor::sendInit() {
+// everything the page needs to come back as it was: the panel's state, the sound, patches, settings, the bank.
+// The page fetches it (/x/init.json) as well as getting it as a message, so a lost message can't empty it.
+juce::var ExwEditor::initPayload() {
+    auto fin = [] (float v, float d) { return std::isfinite (v) ? v : d; };
     juce::Array<juce::var> apcc; for (int i = 0; i < 16; ++i) apcc.add (proc.settings.apCC[(size_t) i].load());
-    juce::Array<juce::var> knobs; for (int i = 0; i < 16; ++i) { knobs.add (proc.knob (i)); sentKnobs[i] = proc.knob (i); }
+    juce::Array<juce::var> knobs; for (int i = 0; i < 16; ++i) { float k = fin (proc.knob (i), 0); knobs.add (k); sentKnobs[i] = k; }
     auto* po = new juce::DynamicObject();
-    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) { float v = r->convertFrom0to1 (r->getValue()); po->setProperty (r->getParameterID(), v); uiKnown[r->getParameterID()] = v; }
+    for (auto* prm : proc.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) { float v = fin (r->convertFrom0to1 (r->getValue()), r->convertFrom0to1 (r->getDefaultValue())); po->setProperty (r->getParameterID(), v); uiKnown[r->getParameterID()] = v; }
     auto recent = juce::File (proc.userSettings().getValue ("recentBank"));
-    send (obj ({ { "type", "init" }, { "ui", proc.uiState() }, { "engine", proc.engineState() }, { "ls", lsGet() }, { "patches", proc.patchLibrary() },
-                 { "apcc", apcc }, { "knobs", knobs }, { "params", juce::var (po) }, { "bank", bankInfo() }, { "loading", proc.isLoading() }, { "status", proc.bankStatus() },
-                 { "recent", recent.existsAsFile() ? recent.getFullPathName() : juce::String() }, { "hostParams", proc.takeClosedChanges() } }));
     sentBankVer = proc.bankVersion();
+    return obj ({ { "type", "init" }, { "ui", proc.uiState() }, { "engine", proc.engineState() }, { "ls", lsGet() }, { "patches", proc.patchLibrary() },
+                  { "apcc", apcc }, { "knobs", knobs }, { "params", juce::var (po) }, { "bank", bankInfo() }, { "loading", proc.isLoading() }, { "status", proc.bankStatus() },
+                  { "recent", recent.existsAsFile() ? recent.getFullPathName() : juce::String() }, { "hostParams", proc.peekClosedChanges() } });
 }
+
+void ExwEditor::sendInit() { send (initPayload()); }
 
 void ExwEditor::timerCallback() {
     if (! ready) return;
@@ -138,6 +147,7 @@ void ExwEditor::handle (const juce::var& m) {
     auto type = m["type"].toString();
     if (type == "ready") { ready = true; proc.uiActive = true; initPending = true; if (web.isShowing()) { sendInit(); initPending = false; } }
     else if (type == "learn") proc.startLearn ((int) m["index"]);
+    else if (type == "restored") proc.takeClosedChanges();
     else if (type == "engine") proc.setEngineState (m["state"], (bool) m["reset"], m["ic"]);
     else if (type == "ui") proc.setUiState (m["state"]);
     else if (type == "knobs") proc.setKnobs (m["values"]);

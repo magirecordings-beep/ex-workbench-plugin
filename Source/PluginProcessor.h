@@ -49,7 +49,8 @@ public:
     bool takeLearned (int& knob, int& cc) { int v = learned.exchange (-1); if (v < 0) return false; knob = v & 255; cc = v >> 8; return true; }
     // the panel is open and applies the panel parameters itself; while it's closed the processor does
     std::atomic<bool> uiActive { false };
-    juce::var takeClosedChanges();   // panel parameters the host moved while the panel was closed
+    juce::var takeClosedChanges();
+    juce::var peekClosedChanges() const { return juce::var (closedChanges.get()); }   // panel parameters the host moved while the panel was closed
     static bool isPanelParam (const juce::String& id);
     void setKnobs (const juce::var& values);      // A-P from the panel (0..1)
     void setApCC (const juce::var& list);

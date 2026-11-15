@@ -24,6 +24,7 @@ private:
     void handle (const juce::var& msg);
     void send (const juce::var& v) { web.emitEventIfBrowserIsVisible ("exw", v); }
     void sendInit();
+    juce::var initPayload();
     juce::var bankInfo() const;
     juce::var lsGet();
     void lsPut (const juce::var& o);

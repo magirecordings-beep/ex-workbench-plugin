@@ -5452,7 +5452,7 @@ function engineSnapshot() {
 const selKey = () => { const c = state.current; return c ? c.type + ':' + c.key + ':' + (c.type === 'preset' ? state.presets[c.key]?.name : c.type === 'patch' ? '' : state.zones.length) : ''; };
 let sentEngine = '', sentSel = null;
 function syncEngine() {
-  if (!state.bankInfo) return;
+  if (!state.bankInfo || !restoredDone) return;
   let s; try { s = engineSnapshot(); } catch (e) { console.warn(e); return; }
   const j = JSON.stringify(s); if (j === sentEngine) return;
   const k = selKey(), reset = k !== sentSel; sentSel = k; sentEngine = j;
@@ -5512,7 +5512,10 @@ function uiSnapshot() {
     knobs: MIDI_AP.map(k => ctrl.val[k] ?? 0) };
 }
 let sentUi = '';
-function syncUi() { let j; try { j = JSON.stringify(uiSnapshot()); } catch (e) { return; } if (j !== sentUi) { sentUi = j; toNative({ type: 'ui', state: JSON.parse(j) }); } }
+let restoredDone = false;
+function syncUi() {
+  if (!restoredDone) return;   // a fresh window would overwrite the saved edits with its empty start
+  let j; try { j = JSON.stringify(uiSnapshot()); } catch (e) { return; } if (j !== sentUi) { sentUi = j; toNative({ type: 'ui', state: JSON.parse(j) }); } }
 async function restoreUi(u) {
   if (!u) return;
   try {
@@ -5622,7 +5625,7 @@ function pluginFace() {
 }
 
 // ---------- messages from the plugin ----------
-let started = false;
+let started = false; const bootAt = Date.now();
 async function onNative(m) {
   if (!m || !m.type) return;
   if (m.type === 'init') {
@@ -5645,6 +5648,7 @@ async function onNative(m) {
     else if (m.status && /not found/i.test(m.status)) toast(m.status + '. Press Open bank to find it.');
     $('#btn-forget').hidden = !m.bank && !m.recent;
     step('host parameters', () => { if (m.hostParams) onHostParams(m.hostParams); });
+    restoredDone = true; toNative({ type: 'restored' });
     syncAll();
   } else if (m.type === 'bank') {
     const keep = uiSnapshot();
@@ -5657,7 +5661,8 @@ async function onNative(m) {
     syncAll();
   } else if (m.type === 'status') {
     // the plugin has a bank this page hasn't shown (a message got lost, the window was reopened): read it now
-    if (m.bankVer && m.bankVer !== bankLoaded && !bankBusy && !m.loading && Date.now() > bankRetryAt) {
+    if (m.bankVer && m.bankVer !== bankLoaded && !bankBusy && !m.loading && Date.now() > bankRetryAt && (restoredDone || Date.now() - bootAt > 6000)) {
+      if (!restoredDone) { restoredDone = true; }
       const had = !!state.presets.length;
       nativeBank({ name: m.bankName, ver: m.bankVer }).then(async () => {
         if (!had && bankLoaded > 0 && !state.current) { const i = state.presets.findIndex(p => p.def); if (i >= 0) { state.tab = 'pre'; renderList(); await selectPreset(i); } }
@@ -5754,6 +5759,8 @@ function bridgeStart() {
   XB.addEventListener('exw', onNative);
   setInterval(() => { syncEngine(); syncKnobs(); syncParams(); }, 30);
   setInterval(syncUi, 700);
+  // the start-up state comes by fetch (no message size or timing to lose it), and as a message too
+  (async () => { for (let k = 0; k < 20 && !started; k++) { try { const r = await fetch('/x/init.json'); if (r.ok) { await onNative({ ...(await r.json()), type: 'init' }); break; } } catch (e) {} await new Promise(z => setTimeout(z, 300)); } })();
   // ask until the plugin answers: a window that isn't on screen yet (or was hidden) drops messages
   toNative({ type: 'ready' });
   const ask = setInterval(() => { if (started) clearInterval(ask); else toNative({ type: 'ready' }); }, 400);
