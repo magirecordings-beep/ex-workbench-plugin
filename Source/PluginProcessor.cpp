@@ -414,7 +414,7 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     notes = engine.activeNotes();
 }
 
-juce::var ExwProcessor::takeClosedChanges() { juce::var v (closedChanges.get()); closedChanges = nullptr; return v; }
+juce::var ExwProcessor::takeClosedChanges() { juce::var v = peekClosedChanges(); closedChanges = nullptr; return v; }
 
 namespace {
 juce::DynamicObject* dobj (const juce::var& v) { return v.getDynamicObject(); }

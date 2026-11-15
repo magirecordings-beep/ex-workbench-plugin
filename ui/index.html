@@ -5417,6 +5417,7 @@ async function nativeBankRead(info) {
     renderAll();
     $('#btn-forget').hidden = false;
     bankLoaded = info.ver || 1;
+    if (!restoredDone && Date.now() - bootAt > 4000) restoredDone = true;   // no start-up state came: carry on with what is here
   } catch (e) { console.warn(e); toast('Couldn’t read the bank from the plugin (' + (e.message || e) + '). Trying again…'); bankLoaded = -1; bankRetryAt = Date.now() + 2500; }
   finally { progress(null); }
 }
@@ -5651,6 +5652,7 @@ async function onNative(m) {
     restoredDone = true; toNative({ type: 'restored' });
     syncAll();
   } else if (m.type === 'bank') {
+    restoredDone = true;
     const keep = uiSnapshot();
     await nativeBank(m.bank);
     // the same bank again (reloaded): keep what was selected; a new bank: its first preset
@@ -5763,6 +5765,7 @@ function bridgeStart() {
   (async () => { for (let k = 0; k < 20 && !started; k++) { try { const r = await fetch('/x/init.json'); if (r.ok) { await onNative({ ...(await r.json()), type: 'init' }); break; } } catch (e) {} await new Promise(z => setTimeout(z, 300)); } })();
   // ask until the plugin answers: a window that isn't on screen yet (or was hidden) drops messages
   toNative({ type: 'ready' });
+  setTimeout(() => { if (!restoredDone) { restoredDone = true; syncAll(); } }, 6000);   // never leave the sound waiting
   const ask = setInterval(() => { if (started) clearInterval(ask); else toNative({ type: 'ready' }); }, 400);
 }
 

@@ -66,6 +66,12 @@ int main (int argc, char** argv) {
         proc->startLearn (2); { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::controllerEvent (1, 30, 64), 0); block (proc, m); }
         int k, cc; bool got = proc->takeLearned (k, cc); printf ("learned: %s knob %d cc %d, apCC[2]=%d, knob C now %.3f\n", got ? "yes" : "no", k, cc, proc->settings.apCC[2].load(), proc->knob (2));
     }
+    { // what the plugin window gets at start-up must be valid JSON (an empty object once wrote nothing)
+        auto* o = new juce::DynamicObject(); o->setProperty ("hostParams", proc->peekClosedChanges()); o->setProperty ("ui", proc->uiState()); o->setProperty ("engine", proc->engineState());
+        auto j = juce::JSON::toString (juce::var (o), true);
+        juce::File ("/tmp/claude-0/init_check.json").replaceWithText (j);
+        printf ("start-up JSON %d bytes, parses back: %s\n", j.length(), juce::JSON::parse (j).isObject() ? "yes" : "NO");
+    }
     // save and restore into a new instance
     juce::MemoryBlock mb; p->getStateInformation (mb);
     std::unique_ptr<juce::AudioProcessor> p2 (createPluginFilter()); auto* proc2 = dynamic_cast<ExwProcessor*> (p2.get());

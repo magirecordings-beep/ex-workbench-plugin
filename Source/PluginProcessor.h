@@ -50,7 +50,7 @@ public:
     // the panel is open and applies the panel parameters itself; while it's closed the processor does
     std::atomic<bool> uiActive { false };
     juce::var takeClosedChanges();
-    juce::var peekClosedChanges() const { return juce::var (closedChanges.get()); }   // panel parameters the host moved while the panel was closed
+    juce::var peekClosedChanges() const { return closedChanges ? juce::var (closedChanges.get()) : juce::var(); }   // (an empty object pointer would be written as nothing, breaking the JSON)   // panel parameters the host moved while the panel was closed
     static bool isPanelParam (const juce::String& id);
     void setKnobs (const juce::var& values);      // A-P from the panel (0..1)
     void setApCC (const juce::var& list);
