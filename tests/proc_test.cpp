@@ -72,6 +72,20 @@ int main (int argc, char** argv) {
         juce::File ("/tmp/claude-0/init_check.json").replaceWithText (j);
         printf ("start-up JSON %d bytes, parses back: %s\n", j.length(), juce::JSON::parse (j).isObject() ? "yes" : "NO");
     }
+    { // arpeggiators per layer: layer 1 follows the master (on, 1/16), layer 2 its own (1/8), layer 3 plays straight
+        auto setp = [&] (const char* id, float v) { auto* r = dynamic_cast<juce::RangedAudioParameter*> (proc->params.getParameter (id)); r->setValueNotifyingHost (r->convertTo0to1 (v)); };
+        juce::String ly = R"({"src":{"type":"preset","name":"raw:Basic Saw","bank":"Xtreme_Lead-1.exb"},"on":true,"filter":{"type":"preset"},"lfos":[],"fgs":[],"sendA":0,"sendB":0,"arp":%A%})";
+        juce::String lays = ",\"layers\":[" + ly.replace ("%A%", R"({"mode":"master"})") + "," + ly.replace ("%A%", R"({"mode":"own","pattern":"down","rate":"1/8","oct":1,"gate":50,"swing":0})") + "," + ly.replace ("%A%", R"({"mode":"off"})") + ",null]";
+        proc->setEngineState (state (R"({"type":"patch"})", lays), true, juce::var()); pump (50);
+        setp ("arpMode", 1); setp ("arpRate", 3); setp ("arpSync", 1); setp ("arpTempo", 120);
+        { juce::MidiBuffer m; block (proc, m); }
+        auto s0 = proc->notesStarted();
+        for (int k = 0; k < 94; ++k) { juce::MidiBuffer m; if (k == 0) for (int n : { 48, 52, 55 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); if (k == 93) for (int n : { 48, 52, 55 }) m.addEvent (juce::MidiMessage::noteOff (1, n), 0); block (proc, m); }
+        auto s1 = proc->notesStarted();
+        printf ("1 s held chord, 120 BPM: layer 1 (master 1/16) %d notes, layer 2 (own 1/8) %d, layer 3 (straight) %d  [expect ~16, ~8, 3]\n", s1[0] - s0[0], s1[1] - s0[1], s1[2] - s0[2]);
+        setp ("arpMode", 0); for (int k = 0; k < 100; ++k) { juce::MidiBuffer m; block (proc, m); }
+        printf ("after: notes still sounding %d\n", proc->notesPlaying());
+    }
     // save and restore into a new instance
     juce::MemoryBlock mb; p->getStateInformation (mb);
     std::unique_ptr<juce::AudioProcessor> p2 (createPluginFilter()); auto* proc2 = dynamic_cast<ExwProcessor*> (p2.get());

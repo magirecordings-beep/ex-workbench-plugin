@@ -97,7 +97,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ExwProcessor::layout() {
     l.add (std::make_unique<AudioParameterInt> (ParameterID { "arpOct", 1 }, "Arp octaves", 1, 4, 1));
     f ("arpGate", "Arp gate", 5, 100, 60, 1, "%");
     f ("arpSwing", "Arp swing", 0, 75, 0, 1, "%");
-    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpSync", 1 }, "Arp tempo", StringArray { "Host", "Own" }, 1));
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "arpSync", 1 }, "Arp tempo", StringArray { "Host", "Own" }, 0));   // follows the DAW's tempo unless set otherwise
     f ("arpTempo", "Arp own tempo", 40, 240, 120, 1, "BPM");
     // effects (FX A reverb, FX B, sends, master EQ)
     for (auto& d : xfx::paramDefs()) {
@@ -117,7 +117,7 @@ ExwProcessor::ExwProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       params (*this, nullptr, "EXW", layout()) {
     fxRack = std::make_unique<xfx::FxRack> (params);
-    arp = std::make_unique<Arp>();
+    arp = std::make_unique<Arp>(); layerArpsP = std::make_unique<Arp[]> (4); layerArps = layerArpsP.get();
     engine.setFxHook (fxRack.get());
     for (auto* p : getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p)) params.addParameterListener (r->getParameterID(), this);
     for (int i = 0; i < 16; ++i) { knobVals[(size_t) i] = 0; uiKnobs[(size_t) i] = 0; lastKnobParam[(size_t) i] = -1; }
@@ -145,7 +145,8 @@ bool ExwProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const {
 
 void ExwProcessor::prepareToPlay (double sampleRate, int block) {
     fxRack->prepare (sampleRate, block);
-    arp->prepare (sampleRate);
+    arp->prepare (sampleRate); for (int i = 0; i < 4; ++i) layerArps[i].prepare (sampleRate);
+    events.reserve (4096); arpIn.ensureSize (8192);
     engine.prepare (sampleRate);
     uiNotes.reset (sampleRate);
 }
@@ -263,6 +264,11 @@ std::shared_ptr<exw::Program> ExwProcessor::buildProgram (const juce::var& s) {
             L.filt = filtFrom (l["filter"], &L.filtFromPreset);
             for (int k = 0; k < 3; ++k) { L.lfo[k] = lfoFrom (at (l["lfos"], k), k); L.fg[k] = fgFrom (at (l["fgs"], k)); }
             L.sendA = (float) num (l["sendA"], 20); L.sendB = (float) num (l["sendB"], 0);
+            { auto a = l["arp"]; auto md = a["mode"].toString(); L.arpMode = md == "own" ? 1 : md == "off" ? 2 : 0;
+              static const char* PAT[] = { "up", "down", "updown", "downup", "played", "random", "chord" }; static const char* RATE[] = { "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32" };
+              for (int k = 0; k < 7; ++k) if (a["pattern"].toString() == PAT[k]) L.arpPattern = k;
+              for (int k = 0; k < 6; ++k) if (a["rate"].toString() == RATE[k]) L.arpRate = k;
+              L.arpOct = juce::jlimit (1, 4, (int) num (a["oct"], 1)); L.arpGate = (float) juce::jlimit (5.0, 100.0, num (a["gate"], 60)); L.arpSwing = (float) juce::jlimit (0.0, 75.0, num (a["swing"], 0)); }
         }
     } else if (sel.isObject()) {
         p->nSlots = 1; auto& L = p->slots[0];
@@ -339,9 +345,9 @@ void ExwProcessor::timerCallback() {
     if (changed && engineJson.isObject()) setEngineState (engineJson, false, juce::var());
 }
 
-void ExwProcessor::handleMidi (const juce::MidiMessage& m) {
-    if (m.isNoteOn()) engine.noteOn (m.getNoteNumber(), m.getVelocity());
-    else if (m.isNoteOff()) engine.noteOff (m.getNoteNumber());
+void ExwProcessor::handleMidi (const juce::MidiMessage& m, int mask) {
+    if (m.isNoteOn()) engine.noteOn (m.getNoteNumber(), m.getVelocity(), mask);
+    else if (m.isNoteOff()) engine.noteOff (m.getNoteNumber(), mask);
     else if (m.isController()) {
         const int cc = m.getControllerNumber(), k = learnKnob.load();
         if (k >= 0 && k < 16 && cc != 64 && cc < 120 && cc != 0 && cc != 32) {
@@ -391,18 +397,51 @@ void ExwProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         auto v = [&] (const char* id) { return params.getRawParameterValue (id)->load(); };
         Arp::Params ap; ap.mode = (int) v ("arpMode"); ap.pattern = (int) v ("arpPattern"); ap.rate = (int) v ("arpRate"); ap.oct = (int) v ("arpOct");
         ap.gate = v ("arpGate"); ap.swing = v ("arpSwing"); ap.hostSync = v ("arpSync") < .5f; ap.tempo = v ("arpTempo");
-        arp->process (midi, buffer.getNumSamples(), ap, hostBpm, ppq, playing);
-        arpHeld = arp->heldCount();
+        // which layers the master arpeggiator plays, which run their own, which play the keys straight
+        const auto* pg = engine.program();
+        int masterMask = 0, directMask = 0, ownMask = 0;
+        if (! pg || ! pg->patch) (ap.mode ? masterMask : directMask) = 0xF;
+        else for (int i = 0; i < pg->nSlots && i < 4; ++i) {
+            const int md = pg->slots[i].preset ? pg->slots[i].arpMode : 2;
+            if (md == 1) ownMask |= 1 << i; else if (md == 0 && ap.mode) masterMask |= 1 << i; else directMask |= 1 << i;
+        }
+        const int n = buffer.getNumSamples();
+        events.clear();
+        auto take = [&] (const juce::MidiBuffer& b, int mask, bool notesOnly) {
+            for (auto meta : b) { const auto mm = meta.getMessage(); if (notesOnly && ! mm.isNoteOnOrOff()) continue; events.push_back ({ meta.samplePosition, mm, mask }); } };
+        // master: plays its layers (or the whole sound); when it's switched off it only lets go of its notes
+        arpIn.clear(); if (masterMask) arpIn = midi;
+        arp->process (arpIn, n, ap, hostBpm, ppq, playing);
+        take (arpIn, masterMask ? masterMask : lastMasterMask, true);
+        if (masterMask) lastMasterMask = masterMask;
+        // each layer's own arpeggiator: its pattern, rate, octaves, gate and swing; the master's tempo
+        int held = arp->heldCount();
+        for (int i = 0; i < 4; ++i) {
+            const bool own = ownMask & (1 << i);
+            if (! own && ! layerArpOn[i]) continue;
+            Arp::Params lp = ap; lp.mode = own ? 1 : 0;
+            if (own) { const auto& s = pg->slots[i]; lp.pattern = s.arpPattern; lp.rate = s.arpRate; lp.oct = s.arpOct; lp.gate = s.arpGate; lp.swing = s.arpSwing; }
+            arpIn.clear(); if (own) for (auto meta : midi) if (meta.getMessage().isNoteOnOrOff()) arpIn.addEvent (meta.getMessage(), meta.samplePosition);
+            layerArps[i].process (arpIn, n, lp, hostBpm, ppq, playing);
+            take (arpIn, 1 << i, true);
+            layerArpOn[i] = own; held = std::max (held, layerArps[i].heldCount());
+        }
+        arpHeld = held;
+        // straight to the layers that don't arpeggiate; everything that isn't a note goes once
+        for (auto meta : midi) { const auto mm = meta.getMessage();
+            if (! mm.isNoteOnOrOff()) events.push_back ({ meta.samplePosition, mm, 0xF });
+            else if (directMask) events.push_back ({ meta.samplePosition, mm, directMask }); }
+        std::stable_sort (events.begin(), events.end(), [] (const Ev& a, const Ev& b) { return a.pos < b.pos; });
     }
 
     auto* L = buffer.getWritePointer (0);
     auto* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
     std::vector<float> tmpR; if (! R) { tmpR.resize ((size_t) buffer.getNumSamples()); R = tmpR.data(); }
     int pos = 0, n = buffer.getNumSamples();
-    for (auto meta : midi) {
-        int at = juce::jlimit (0, n, meta.samplePosition);
+    for (auto& e : events) {
+        int at = juce::jlimit (0, n, e.pos);
         if (at > pos) { engine.render (L + pos, R + pos, at - pos); pos = at; }
-        handleMidi (meta.getMessage());
+        handleMidi (e.msg, e.mask);
     }
     if (pos < n) engine.render (L + pos, R + pos, n - pos);
     float pl = 0, pr = 0; for (int i = 0; i < n; ++i) { pl = std::max (pl, std::fabs (L[i])); pr = std::max (pr, std::fabs (R[i])); }

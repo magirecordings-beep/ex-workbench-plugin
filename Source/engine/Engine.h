@@ -48,8 +48,9 @@ public:
     const Program* program() const { return prog; }
 
     // MIDI (audio thread)
-    void noteOn (int note, int vel);
-    void noteOff (int note);
+    // mask: which program slots (patch layers) the note is for - a layer's own arpeggiator plays only its layer
+    void noteOn (int note, int vel, int mask = 0xF);
+    void noteOff (int note, int mask = 0xF);
     void controller (int cc, int value);
     void pitchBend (int value14);
     void channelPressure (int value);
@@ -62,6 +63,7 @@ public:
     void render (float* L, float* R, int n);           // adds nothing: overwrites L/R
     void setFxHook (FxHook* h) { fx = h; }
     int activeNotes() const;
+    std::array<int, 4> started {};   // notes started per slot (tests, readouts)
     int activePlayers() const;
     std::atomic<int> apChanged { 0 };                   // bit per knob moved by MIDI (UI reads and clears)
 
@@ -113,7 +115,7 @@ private:
     std::vector<MonoGroup> monoGroups;
     float ctrlVal[256] {};
     int bankMsb = -1, bankLsb = -1;
-    bool sustain = false; std::vector<bool> susHeld, susPending;
+    bool sustain = false; std::vector<bool> susHeld; std::vector<uint8_t> susPending;   // pending: slot mask
     int lastNote = -1; uint64_t ageCounter = 0;
     std::vector<int> lastSolo;
     std::mt19937 rng { 12345 };
@@ -148,14 +150,14 @@ private:
     float rateSec (float x) const;
     void startNote (int note, int vel, const Voice& v, const Zone& z, int glideFrom, bool solo, int monoGroup);
     void releaseVoice (NoteVoice& nv);
-    void noteOffNow (int note);
+    void noteOffNow (int note, int mask = 0xF);
     void planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fixed[8]);
 
     void setBiquad (Biquad& b, const StageSpec& s, float cents);
     float glideTime (const Voice* vd, int from, int to) const;
     int kbMode (const Voice* vd) const;
     void monoOn (int note, int vel, const Voice& v, const Zone& z, int m);
-    void monoOff (int note);
+    void monoOff (int note, int mask = 0xF);
     float staticSource (int src, int note, int vel);
     void stealIfNeeded();
     float envLevel (const NoteVoice& nv) const;

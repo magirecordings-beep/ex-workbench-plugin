@@ -133,7 +133,7 @@ function engineSnapshot() {
   if (pt) {
     s.mf = pt.mfilter || newMaster();
     s.layers = pt.layers.map(ly => ({ src: ly.src ? srcOf(resolveLayer(ly)) : null, on: ly.on, solo: ly.solo, volDb: ly.volDb, pan: ly.pan, coarse: ly.coarse, fine: ly.fine,
-      key: ly.key, vel: ly.vel, useSrcEnv: ly.useSrcEnv, env: ly.env, filter: ly.filter, lfos: lfosFor({ ly }), fgs: fgsFor({ ly }), sendA: ly.sendA, sendB: ly.sendB }));
+      key: ly.key, vel: ly.vel, useSrcEnv: ly.useSrcEnv, env: ly.env, filter: ly.filter, lfos: lfosFor({ ly }), fgs: fgsFor({ ly }), sendA: ly.sendA, sendB: ly.sendB, arp: ly.arp || newLayerArp() }));
   }
   return s;
 }
@@ -303,6 +303,8 @@ addEventListener('keydown', e => {
 }, true);
 
 // ---------- what's different in a plugin window ----------
+const arpShowWeb = arpShow;
+arpShow = () => { arpShowWeb(); const ck = $('#arp-clock'); if (ck) ck.textContent = perf.sync === 'clock' ? '· following your DAW’s tempo' : ''; };
 function pluginFace() {
   $('#btn-sound').hidden = true; $('#midi-sel').hidden = true;
   $('#midi-txt').textContent = 'MIDI from host';
@@ -325,6 +327,7 @@ async function onNative(m) {
     step('My patches', () => { if (Array.isArray(m.patches) && m.patches.length) { savedLib = m.patches.slice(); loadPatchJSON(JSON.stringify({ format: PATCH_FORMAT, patches: savedLib }), 'Patch'); renderList(); } });
     step('master', () => { if (typeof m.params?.master === 'number') setMaster(m.params.master); });
     if (m.params && typeof m.params === 'object') Object.assign(sentParams, m.params);
+    if (!m.ui) { perf.sync = 'clock'; perfRender(); }   // a new plugin follows the DAW's tempo
     if (m.loading) progress(m.status || 'Loading…');
     if (m.bank) {
       await nativeBank(m.bank);
@@ -367,7 +370,7 @@ async function onNative(m) {
     if (Array.isArray(m.midi)) for (const v of m.midi) midiShow(v & 255, (v >> 8) & 255, (v >> 16) & 255, true);
     if (Array.isArray(m.knobs)) MIDI_AP.forEach((k, i) => { if (Math.abs((ctrl.val[k] ?? 0) - m.knobs[i]) > .004) { setCtrl(k, m.knobs[i]); sentKnobs[i] = m.knobs[i]; } });
     if ('loading' in m) { if (m.loading) progress(m.status || 'Loading…', m.progress, 1); else progress(null); if (!m.loading && m.status && /^(Couldn|No |Not an|Bank not)/.test(m.status)) toast(m.status); }
-    if (perf.arp !== 'off') { const h = $('#arp-held'); if (h) h.textContent = m.arp ? m.arp + ' key' + (m.arp > 1 ? 's' : '') + ' held' : 'hold some keys'; }
+    if (perf.arp !== 'off' || curPatch()?.layers.some(l => l.src && l.arp?.mode === 'own')) { const h = $('#arp-held'); if (h) h.textContent = m.arp ? m.arp + ' key' + (m.arp > 1 ? 's' : '') + ' held' : 'hold some keys'; }
     if (m.select) { const i = state.presets.findIndex(p => p.name === m.select); if (i >= 0 && !(state.current?.type === 'preset' && state.current.key === i)) { state.tab = 'pre'; await selectPreset(i); renderList(); revealCurrent?.(); } }
   } else if (m.type === 'hostParams') { onHostParams(m.values || {});
   } else if (m.type === 'learned') { if (learnIdx === m.index) learnCc(m.cc);

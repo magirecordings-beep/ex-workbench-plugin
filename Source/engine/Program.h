@@ -39,6 +39,8 @@ struct Slot {
     bool filtFromPreset = true; FiltSpec filt;
     LfoSpec lfo[3]; FgDef fg[3];
     float sendA = 20, sendB = 0;      // %, layers only
+    // its arpeggiator: 0 follows the master one, 1 its own (pattern, rate, octaves, gate, swing; the master's tempo), 2 plays straight
+    int arpMode = 0, arpPattern = 0, arpRate = 3, arpOct = 1; float arpGate = 60, arpSwing = 0;
 };
 
 struct Program {

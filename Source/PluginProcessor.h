@@ -62,6 +62,7 @@ public:
     bool isLoading() const { return loading.load(); }
     float knob (int i) const { return knobVals[(size_t) i].load(); }
     int notesPlaying() const { return notes.load(); }
+    std::array<int, 4> notesStarted() const { return engine.started; }
     int arpKeys() const { return arpHeld.load(); }
     int bankVersion() const { return bankVer.load(); }
     float peak (int ch) { return peaks[(size_t) ch].exchange (0); }
@@ -83,6 +84,8 @@ private:
     exw::Engine engine { settings };
     std::unique_ptr<xfx::FxRack> fxRack;
     std::unique_ptr<Arp> arp;
+    std::unique_ptr<Arp[]> layerArpsP; Arp* layerArps = nullptr; bool layerArpOn[4] {}; int lastMasterMask = 0xF;   // each layer's own arpeggiator
+    struct Ev { int pos; juce::MidiMessage msg; int mask; }; std::vector<Ev> events; juce::MidiBuffer arpIn;
     mutable juce::SpinLock bankLock;
     std::shared_ptr<const exw::Bank> bank, pendingBank;
     std::shared_ptr<BankCtx> ctx;   // message thread
@@ -118,7 +121,7 @@ private:
     void timerCallback() override;
     void pushSettings();
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
-    void handleMidi (const juce::MidiMessage& m);
+    void handleMidi (const juce::MidiMessage& m, int mask = 0xF);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ExwProcessor)
 };

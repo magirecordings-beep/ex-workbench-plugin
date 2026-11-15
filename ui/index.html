@@ -322,6 +322,7 @@ input[type=search],input[type=text]{background:#121316;color:var(--ink);border:1
 .kgrid > :not(.kcell):not(.fxr):not(.krow){grid-column:1/-1}
 .kgrid .fxr{display:contents}
 #fxb-x.kgrid{grid-column:1/-1!important}
+.larp-own,body.xl .kcell > label.larp-own{color:#ff9f6a!important} /* these controls edit the layer's own arpeggiator */
 /* the Filter card's seven knobs (frequency, resonance, envelope amount + ADSR) in one row */
 body.xl section[aria-labelledby="filt-title"] .env-rows.kgrid{grid-template-columns:repeat(7,minmax(0,1fr))!important}
 /* layer on/off on every page */
@@ -929,6 +930,7 @@ body.xl .needpool .toolbar button{padding:4px 10px;font-size:12px}
           <span class="pf-l">Glide</span><div class="pseg" id="pf-glide" role="radiogroup" aria-label="Glide"><button type="button" role="radio" data-v="preset" title="Use each voice's own glide">Preset</button><button type="button" role="radio" data-v="off">Off</button><button type="button" role="radio" data-v="custom" title="Same glide time for everything">Custom</button></div>
           <label for="pf-glidems">Glide time</label><input type="range" id="pf-glidems" min="5" max="2000" step="5"><output id="pf-glidems-v"></output>
           <span class="pf-l">Arpeggiator</span><div class="pseg" id="pf-arp" role="radiogroup" aria-label="Arpeggiator"><button type="button" role="radio" data-v="off">Off</button><button type="button" role="radio" data-v="on">On</button><button type="button" role="radio" data-v="latch" title="Keeps playing after you let go; a new chord replaces it">Latch</button></div>
+          <span class="pf-l ly-arp" hidden>Layer <b id="pf-larp-n">1</b> arp</span><div class="pseg ly-arp" id="pf-larp" role="radiogroup" aria-label="This layer's arpeggiator" hidden><button type="button" role="radio" data-v="master" title="Plays the master arpeggiator's pattern (or straight when it's off)">Master</button><button type="button" role="radio" data-v="own" title="Its own pattern, rate, octaves, gate and swing, at the same tempo">Own</button><button type="button" role="radio" data-v="off" title="Plays the keys straight, even while the master arpeggiator runs">Off</button></div>
           <label for="pf-pattern" class="arp-only">Pattern</label><select id="pf-pattern" class="arp-only pf-sel"><option value="up">Up</option><option value="down">Down</option><option value="updown">Up and down</option><option value="downup">Down and up</option><option value="played">As played</option><option value="random">Random</option><option value="chord">Chord repeat</option></select>
           <label for="pf-rate" class="arp-only">Rate</label><select id="pf-rate" class="arp-only pf-sel"><option value="1/4">1/4</option><option value="1/8">1/8</option><option value="1/8T">1/8 triplet</option><option value="1/16">1/16</option><option value="1/16T">1/16 triplet</option><option value="1/32">1/32</option></select>
           <span class="pf-l arp-only">Octaves</span><div class="pseg arp-only" id="pf-oct" role="radiogroup" aria-label="Octaves"><button type="button" role="radio" data-v="1">1</button><button type="button" role="radio" data-v="2">2</button><button type="button" role="radio" data-v="3">3</button><button type="button" role="radio" data-v="4">4</button></div>
@@ -2773,7 +2775,9 @@ function bindFilt() {
 const PATCH_FORMAT = 'ex-workbench-patch';
 const DEFAULT_LAYER_ENV = () => [{ s: .002, l: 100 }, { s: 0, l: 100 }, { s: .6, l: 100 }, { s: 0, l: 100 }, { s: .35, l: 0 }, { s: 0, l: 0 }];
 const UNI_DEFAULT = () => ({ on: false, voices: 5, detune: 20, spread: 70, blend: 70, drift: 15 });
-const newLayer = (src = null) => ({ src, on: true, solo: false, volDb: 0, pan: 0, coarse: 0, fine: 0, key: { lo: 0, hi: 127 }, vel: { lo: 1, hi: 127 }, useSrcEnv: src?.type === 'preset', env: DEFAULT_LAYER_ENV(), sendA: 20, sendB: 0, filter: { type: src?.type === 'preset' ? 'preset' : 'bypass', freq: 70, res: 20, env: 0, decay: .8 }, lfos: [0, 1, 2].map(newLfo) });
+// each layer's arpeggiator: follow the master one, run its own pattern (same tempo), or play straight
+const newLayerArp = () => ({ mode: 'master', pattern: 'up', rate: '1/16', oct: 1, gate: 60, swing: 0 });
+const newLayer = (src = null) => ({ arp: newLayerArp(), src, on: true, solo: false, volDb: 0, pan: 0, coarse: 0, fine: 0, key: { lo: 0, hi: 127 }, vel: { lo: 1, hi: 127 }, useSrcEnv: src?.type === 'preset', env: DEFAULT_LAYER_ENV(), sendA: 20, sendB: 0, filter: { type: src?.type === 'preset' ? 'preset' : 'bypass', freq: 70, res: 20, env: 0, decay: .8 }, lfos: [0, 1, 2].map(newLfo) });
 const curPatch = () => state.current?.type === 'patch' ? state.patches[state.current.key] : null;
 const curLayer = () => curPatch()?.layers[state.layerIdx] || null;
 const layerGain = ly => ly.volDb <= -48 ? 0 : Math.pow(10, ly.volDb / 20);
@@ -2825,7 +2829,7 @@ async function selectPatch(i) {
   fxRender();
   state.layerIdx = Math.min(state.layerIdx, 3);
   presetCtrls(curPatch().layers.map(resolveLayer).find(r => r?.type === 'preset')?.preset.def);
-  { const pt = state.patches[i]; if (pt.perf) { const was = perf.arp; for (const k in perf) if (k !== 'uni' && typeof pt.perf[k] === typeof perf[k]) perf[k] = pt.perf[k]; if (was !== 'off' && perf.arp === 'off') arpStop(true); } else pt.perf = { ...perf }; perfRender(); }
+  { const pt = state.patches[i]; if (pt.perf) { const was = perf.arp; for (const k in perf) if (k !== 'uni' && typeof pt.perf[k] === typeof perf[k]) perf[k] = pt.perf[k]; arpStop(true); } else pt.perf = { ...perf }; perfRender(); }
   renderPatch(); renderList(); renderLCD(); renderKeys(); envRefresh(); filtRender(); lfoRender(); fgRender();
   const want = new Set(curPatch().layers.flatMap(layerSamples));
   await Promise.all([...want].map(ensureAudio));
@@ -2938,14 +2942,14 @@ function setLayerSource(type, name) {
   Promise.all(layerSamples(curLayer()).map(ensureAudio)).then(() => drawWave(layerSamples(curLayer())[0]));
   return true;
 }
-const serialPatch = pt => ({ name: pt.name, layers: pt.layers.map(l => ({ src: l.src, on: l.on, solo: l.solo, volDb: l.volDb, pan: l.pan, coarse: l.coarse, fine: l.fine, key: l.key, vel: l.vel, useSrcEnv: l.useSrcEnv, env: l.env, sendA: l.sendA, sendB: l.sendB, filter: l.filter, lfos: l.lfos, uni: l.uni, fgs: l.fgs })), fx: pt.fx || fxSnapshot(), mfilter: pt.mfilter || newMaster(), perf: pt.perf || null });
+const serialPatch = pt => ({ name: pt.name, layers: pt.layers.map(l => ({ arp: l.arp, src: l.src, on: l.on, solo: l.solo, volDb: l.volDb, pan: l.pan, coarse: l.coarse, fine: l.fine, key: l.key, vel: l.vel, useSrcEnv: l.useSrcEnv, env: l.env, sendA: l.sendA, sendB: l.sendB, filter: l.filter, lfos: l.lfos, uni: l.uni, fgs: l.fgs })), fx: pt.fx || fxSnapshot(), mfilter: pt.mfilter || newMaster(), perf: pt.perf || null });
 function loadPatchJSON(text, fileName) {
   let data; try { data = JSON.parse(text); } catch { return 0; }
   if (data?.format !== PATCH_FORMAT || !Array.isArray(data.patches)) return 0;
   let n = 0;
   for (const raw of data.patches) {
     const layers = Array.from({ length: 4 }, (_, i) => Object.assign(newLayer(), raw.layers?.[i] || {}));
-    layers.forEach(l => { l.lfos = [0, 1, 2].map(i => ({ ...newLfo(i), ...(l.lfos?.[i] || {}) })); l.filter ||= { type: l.src?.type === 'preset' ? 'preset' : 'bypass', freq: 70, res: 20, env: 0, decay: .8 }; l.key = { lo: 0, hi: 127, ...l.key }; l.vel = { lo: 1, hi: 127, ...l.vel }; if (!Array.isArray(l.env) || l.env.length !== 6) l.env = DEFAULT_LAYER_ENV(); delete l._r; });
+    layers.forEach(l => { l.arp = { ...newLayerArp(), ...(l.arp || {}) }; l.lfos = [0, 1, 2].map(i => ({ ...newLfo(i), ...(l.lfos?.[i] || {}) })); l.filter ||= { type: l.src?.type === 'preset' ? 'preset' : 'bypass', freq: 70, res: 20, env: 0, decay: .8 }; l.key = { lo: 0, hi: 127, ...l.key }; l.vel = { lo: 1, hi: 127, ...l.vel }; if (!Array.isArray(l.env) || l.env.length !== 6) l.env = DEFAULT_LAYER_ENV(); delete l._r; });
     state.patches.push({ name: String(raw.name || fileName || 'Patch').slice(0, 40), layers, fx: raw.fx || null, mfilter: { ...newMaster(), ...(raw.mfilter || {}) }, perf: raw.perf && typeof raw.perf === 'object' ? raw.perf : null, dirty: false }); n++;
   }
   return n;
@@ -3528,11 +3532,12 @@ function presetLayers(def, note, vel, out, ly) {
     });
   }
 }
-function layersFor(note, vel) {
+function layersFor(note, vel, only) {
   if (state.current?.type === 'patch') {
     const out = [], pt = curPatch(); if (!pt) return out;
     for (const ly of pt.layers) {
       if (!ly.src) continue;
+      if (only !== undefined && !arpTakes(only, ly)) continue;
       if (note < ly.key.lo || note > ly.key.hi || vel < ly.vel.lo || vel > ly.vel.hi) continue;
       const r = resolveLayer(ly); if (!r) continue;
       if (r.type === 'preset') { presetLayers(r.preset.def, note, vel, out, ly); continue; }
@@ -3549,15 +3554,40 @@ function layersFor(note, vel) {
   const z = state.zones.find(z => note >= z.lo && note <= z.hi);
   return z ? [{ sample: z.sample, env: envState.env, baseSemis: note - z.root, baseGain: 1, basePan: 0 }] : [];
 }
-async function noteOn(note, vel = 100, from, at) {
+// which arpeggiators a key goes to: the master one (layers set to Master, or the whole sound without a patch),
+// each layer's own, and the layers that play straight
+function arpRoutes() {
+  const pt = curPatch(), m = perf.arp !== 'off';
+  if (!pt) return { master: m, own: [], direct: !m };
+  const R = { master: false, own: [], direct: false };
+  pt.layers.forEach((ly, i) => { if (!ly.src) return; const md = ly.arp?.mode || 'master';
+    if (md === 'own') R.own.push(i); else if (md === 'master' && m) R.master = true; else R.direct = true; });
+  return R;
+}
+// does a note from `only` ('master', a layer number, 'direct') play this layer
+function arpTakes(only, ly) {
+  const md = ly.arp?.mode || 'master', pt = curPatch();
+  if (only === 'master') return md === 'master';
+  if (only === 'direct') return md === 'off' || (md === 'master' && perf.arp === 'off');
+  if (typeof only === 'number') return pt?.layers[only] === ly;
+  return true;
+}
+async function noteOn(note, vel = 100, from, at, only) {
   vel = Math.max(1, Math.min(127, vel | 0));
   if (from !== 'arp') {
     sus.held.add(note);
-    if (perf.arp !== 'off') { sus.pending.delete(note); keyEl(note)?.classList.add('on'); arpKeyDown(note, vel); return; }
+    const R = arpRoutes();
+    if (R.master || R.own.length) {
+      sus.pending.delete(note); keyEl(note)?.classList.add('on');
+      if (R.master) arpKeyDown(note, vel, arp);
+      for (const i of R.own) arpKeyDown(note, vel, larps[i]);
+      if (!R.direct) return;
+      only = 'direct';
+    }
     if (sus.pending.has(note)) { sus.pending.delete(note); noteOffNow(note); } // re-striking a sustained note restarts it
   }
   mfKey(note, true);
-  const layers = layersFor(note, vel); if (!layers.length) return;
+  const layers = layersFor(note, vel, only); if (!layers.length) return;
   const gen = gens[note] = (gens[note] || 0) + 1;
   audio(); await Promise.all(layers.map(l => ensureAudio(l.sample)));
   if (gens[note] !== gen) return; // released while the sample was still loading
@@ -4171,12 +4201,22 @@ function noteOff(note) {
   if (sus.on) { sus.pending.add(note); keyEl(note)?.classList.remove('on'); return; }
   noteOffNow(note);
 }
-function noteOffNow(note, from, at) {
-  if (from !== 'arp' && perf.arp !== 'off') { arpKeyUp(note); keyEl(note)?.classList.remove('on'); return; }
-  gens[note] = (gens[note] || 0) + 1;
+function noteOffNow(note, from, at, only) {
+  if (from !== 'arp') {
+    const R = arpRoutes();
+    if (R.master || R.own.length) {
+      if (R.master) arpKeyUp(note, arp);
+      for (const i of R.own) arpKeyUp(note, larps[i]);
+      keyEl(note)?.classList.remove('on');
+      if (!R.direct) return;
+      only = 'direct';
+    }
+  }
+  if (only === undefined) gens[note] = (gens[note] || 0) + 1;
   mfKey(note, false);
   if (ctx) monoOff(note);
-  const l = voices.get(note); if (l && ctx) stopVoices(note, l.slice(), at);
+  const l = voices.get(note);
+  if (l && ctx) stopVoices(note, only === undefined ? l.slice() : l.filter(v => !v.l?.ly || arpTakes(only, v.l.ly)), at);
   keyEl(note)?.classList.remove('on');
 }
 function panic() { sus.on = false; sus.pending.clear(); sus.held.clear(); monoGroups.clear(); arpStop(true); for (const [n, l] of voices) { stopVoices(n, l.slice()); } document.querySelectorAll('.key.on').forEach(k => k.classList.remove('on')); }
@@ -4186,24 +4226,31 @@ function panic() { sus.on = false; sus.pending.clear(); sus.held.clear(); monoGr
    Plays the keys you hold one at a time in time with the tempo (or the MIDI clock from your DAW). Notes are scheduled
    a little ahead on the audio clock, so timing stays tight even when the page is busy. */
 const ARP_RATES = { '1/4': 1, '1/8': .5, '1/8T': 1 / 3, '1/16': .25, '1/16T': 1 / 6, '1/32': .125 };
-const arp = { keys: [], latched: false, step: 0, dir: 1, timer: 0, next: 0, playing: new Map(), tick: 0, clockRun: false, lastClock: 0, clockBpm: 0, count: 0 };
-function arpKeyDown(note, vel) {
-  if (perf.arp === 'latch' && !arp.keys.some(k => k.down)) { arp.keys = []; } // a fresh chord replaces the latched one
-  arp.keys = arp.keys.filter(k => k.note !== note); arp.keys.push({ note, vel, down: true, order: arp.count++ });
-  if (!arp.timer && !(perf.sync === 'clock' && arp.clockRun)) arpStart();
+// an arpeggiator: the master one (perf) or a layer's own (its pattern, rate, octaves, gate, swing; perf's tempo and sync)
+const newArpRun = idx => ({ idx, keys: [], step: 0, timer: 0, next: 0, playing: new Map(), count: 0, tick: 0 });
+const arp = Object.assign(newArpRun(null), { latched: false, dir: 1, clockRun: false, lastClock: 0, clockBpm: 0 });
+const larps = [0, 1, 2, 3].map(newArpRun);
+const arpP = A => { if (A.idx === null) return perf; const ly = curPatch()?.layers[A.idx]; const o = ly?.arp || newLayerArp(); return { ...perf, arp: 'on', pattern: o.pattern, rate: o.rate, oct: o.oct, gate: o.gate, swing: o.swing }; };
+const arpOnly = A => A.idx === null ? 'master' : A.idx;
+const allArps = () => [arp, ...larps];
+function arpKeyDown(note, vel, A = arp) {
+  const p = arpP(A);
+  if (p.arp === 'latch' && !A.keys.some(k => k.down)) { A.keys = []; } // a fresh chord replaces the latched one
+  A.keys = A.keys.filter(k => k.note !== note); A.keys.push({ note, vel, down: true, order: A.count++ });
+  if (!A.timer && !(p.sync === 'clock' && arp.clockRun)) arpStart(A);
   arpShow();
 }
-function arpKeyUp(note) {
-  const k = arp.keys.find(k => k.note === note); if (!k) return;
+function arpKeyUp(note, A = arp) {
+  const k = A.keys.find(k => k.note === note); if (!k) return;
   k.down = false;
-  if (perf.arp !== 'latch') arp.keys = arp.keys.filter(x => x !== k);
-  if (!arp.keys.length) arpStop();
+  if (arpP(A).arp !== 'latch') A.keys = A.keys.filter(x => x !== k);
+  if (!A.keys.length) arpStop(false, A);
   arpShow();
 }
-function arpSequence() {
-  const base = arp.keys.slice(), byPitch = base.slice().sort((a, b) => a.note - b.note);
-  const oct = n => { const out = []; for (let o = 0; o < perf.oct; o++) for (const k of n) out.push({ note: k.note + 12 * o, vel: k.vel }); return out.filter(k => k.note <= 127); };
-  switch (perf.pattern) {
+function arpSequence(A = arp) {
+  const p = arpP(A), base = A.keys.slice(), byPitch = base.slice().sort((a, b) => a.note - b.note);
+  const oct = n => { const out = []; for (let o = 0; o < p.oct; o++) for (const k of n) out.push({ note: k.note + 12 * o, vel: k.vel }); return out.filter(k => k.note <= 127); };
+  switch (p.pattern) {
     case 'down': return oct(byPitch).reverse();
     case 'updown': { const u = oct(byPitch); return u.length > 2 ? u.concat(u.slice(1, -1).reverse()) : u; }
     case 'downup': { const d = oct(byPitch).reverse(); return d.length > 2 ? d.concat(d.slice(1, -1).reverse()) : d; }
@@ -4213,21 +4260,22 @@ function arpSequence() {
     default: return oct(byPitch);
   }
 }
-const stepSec = () => 60 / (perf.sync === 'clock' && arp.clockBpm ? arp.clockBpm : perf.tempo) * ARP_RATES[perf.rate];
-function arpPlayStep(t) {
-  const seq = arpSequence(); if (!seq.length) return;
+const stepSec = (A = arp) => { const p = arpP(A); return 60 / (p.sync === 'clock' && arp.clockBpm ? arp.clockBpm : p.tempo) * (ARP_RATES[p.rate] || .25); };
+function arpPlayStep(t, A = arp) {
+  const seq = arpSequence(A); if (!seq.length) return;
+  const p = arpP(A), only = arpOnly(A);
   let item;
-  if (perf.pattern === 'random') item = seq[Math.floor(Math.random() * seq.length)];
-  else { item = seq[arp.step % seq.length]; }
-  arp.step++;
-  const swing = arp.step % 2 === 0 ? perf.swing / 100 * stepSec() * .5 : 0; // every second step is pushed late
-  const at = t + swing, len = Math.max(.01, stepSec() * perf.gate / 100);
+  if (p.pattern === 'random') item = seq[Math.floor(Math.random() * seq.length)];
+  else { item = seq[A.step % seq.length]; }
+  A.step++;
+  const swing = A.step % 2 === 0 ? p.swing / 100 * stepSec(A) * .5 : 0; // every second step is pushed late
+  const at = t + swing, len = Math.max(.01, stepSec(A) * p.gate / 100);
   for (const k of item.chord || [item]) {
     // a note still held from the last step is released first so it can restart cleanly
-    if (arp.playing.has(k.note)) { noteOffNow(k.note, 'arp', at - .002); }
-    arp.playing.set(k.note, at + len);
-    noteOn(k.note, k.vel, 'arp', at);
-    arpLater(at + len, () => { if (arp.playing.get(k.note) === at + len) { arp.playing.delete(k.note); noteOffNow(k.note, 'arp', at + len); } });
+    if (A.playing.has(k.note)) { noteOffNow(k.note, 'arp', at - .002, only); }
+    A.playing.set(k.note, at + len);
+    noteOn(k.note, k.vel, 'arp', at, only);
+    arpLater(at + len, () => { if (A.playing.get(k.note) === at + len) { A.playing.delete(k.note); noteOffNow(k.note, 'arp', at + len, only); } });
   }
   arpFlash(at);
 }
@@ -4237,34 +4285,43 @@ function arpLater(time, fn) { arpQ.push({ time, fn }); }
 function arpPump() {
   if (!ctx) return;
   const now = ctx.currentTime, ahead = now + .12; // generous look-ahead: a busy main thread (knob drags, redraws) can't make notes late
-  if (arp.timer && perf.sync !== 'clock' && arp.keys.length) while (arp.next < ahead) { arpPlayStep(Math.max(arp.next, now)); arp.next += stepSec(); }
+  for (const A of allArps()) if (A.timer && arpP(A).sync !== 'clock' && A.keys.length) while (A.next < ahead) { arpPlayStep(Math.max(A.next, now), A); A.next += stepSec(A); }
   for (let i = arpQ.length - 1; i >= 0; i--) if (arpQ[i].time < ahead) { const e = arpQ.splice(i, 1)[0]; e.fn(); }
-  if (!arp.timer && !arpQ.length) { clearInterval(arpPumpId); arpPumpId = 0; }
+  if (!allArps().some(A => A.timer) && !arpQ.length) { clearInterval(arpPumpId); arpPumpId = 0; }
 }
 let arpPumpId = 0;
 const arpPumpOn = () => { if (!arpPumpId) arpPumpId = setInterval(arpPump, 20); };
-function arpStart() {
+function arpStart(A = arp) {
   audio(); if (!ctx) return;
-  arp.step = 0; arp.timer = 1; arp.next = ctx.currentTime + .005; arpPumpOn(); arpPump();
+  // a layer's own arp starting while another runs locks to its grid (same tempo, steps line up)
+  const run = allArps().find(x => x !== A && x.timer && x.keys.length);
+  A.step = 0; A.timer = 1; A.next = run ? run.next : ctx.currentTime + .005; arpPumpOn(); arpPump();
 }
-function arpStop(all) {
-  arp.timer = 0;
-  if (all) { arp.keys = []; arpQ.length = 0; }
-  if (ctx) for (const [n] of arp.playing) noteOffNow(n, 'arp');
-  arp.playing.clear(); arpShow();
+function arpStop(all, A) {
+  for (const X of A ? [A] : allArps()) {
+    X.timer = 0;
+    if (all) X.keys = [];
+    if (ctx) for (const [n] of X.playing) noteOffNow(n, 'arp', undefined, arpOnly(X));
+    X.playing.clear();
+  }
+  if (all && !A) arpQ.length = 0;
+  arpShow();
 }
 // MIDI clock (24 ticks per quarter note) from your DAW drives the steps when Sync is set to MIDI clock
 function arpClock(st) {
-  if (st === 0xfa) { arp.tick = 0; arp.clockRun = true; arp.step = 0; return; }
+  if (st === 0xfa) { arp.tick = 0; arp.clockRun = true; allArps().forEach(A => A.step = 0); return; }
   if (st === 0xfb) { arp.clockRun = true; return; }
   if (st === 0xfc) { arp.clockRun = false; if (perf.sync === 'clock') arpStop(); return; }
   if (st !== 0xf8) return;
   const now = performance.now();
   if (arp.lastClock) { const bpm = 60000 / ((now - arp.lastClock) * 24); arp.clockBpm = arp.clockBpm ? arp.clockBpm * .9 + bpm * .1 : bpm; }
   arp.lastClock = now; arp.clockRun = true;
-  if (perf.sync !== 'clock' || perf.arp === 'off' || !arp.keys.length || !ctx) { arp.tick++; return; }
-  const per = Math.max(1, Math.round(24 * ARP_RATES[perf.rate]));
-  if (arp.tick % per === 0) { arpPumpOn(); arpPlayStep(ctx.currentTime + .005); }
+  if (perf.sync !== 'clock' || !ctx) { arp.tick++; return; }
+  for (const A of allArps()) {
+    const p = arpP(A); if ((A.idx === null && perf.arp === 'off') || !A.keys.length) continue;
+    const per = Math.max(1, Math.round(24 * (ARP_RATES[p.rate] || .25)));
+    if (arp.tick % per === 0) { arpPumpOn(); arpPlayStep(ctx.currentTime + .005, A); }
+  }
   arp.tick++;
   if (arp.tick % 24 === 0) { arpShow(); if (fx && tempoFx()) fx.bUpd?.(); }
 }
@@ -4276,8 +4333,10 @@ function arpFlash(at) {
 }
 function arpShow() {
   const el = $('#arp-held'); if (!el) return;
-  const names = arp.keys.slice().sort((a, b) => a.note - b.note).map(k => noteName(k.note));
-  el.textContent = perf.arp === 'off' ? '' : names.length ? names.join(' ') + (perf.arp === 'latch' && !arp.keys.some(k => k.down) ? ' · latched' : '') : 'hold some keys';
+  const keys = [...new Map(allArps().flatMap(A => A.keys).map(k => [k.note, k])).values()];
+  const names = keys.sort((a, b) => a.note - b.note).map(k => noteName(k.note));
+  const anyOwn = curPatch()?.layers.some(l => l.src && l.arp?.mode === 'own');
+  el.textContent = perf.arp === 'off' && !anyOwn ? '' : names.length ? names.join(' ') + (perf.arp === 'latch' && !arp.keys.some(k => k.down) ? ' · latched' : '') : 'hold some keys';
   const ck = $('#arp-clock'); if (ck) ck.textContent = perf.sync === 'clock' ? (arp.clockRun && arp.clockBpm ? Math.round(arp.clockBpm) + ' BPM from MIDI clock' : 'waiting for MIDI clock (press play in your DAW)') : '';
 }
 
@@ -4290,8 +4349,15 @@ function perfRender() {
   r('pf-glidems', perf.glideMs, perf.glideMs + ' ms'); r('pf-gate', perf.gate, perf.gate + '%'); r('pf-swing', perf.swing, perf.swing + '%'); r('pf-tempo', perf.tempo, perf.tempo + ' BPM');
   $('#pf-glidems').disabled = perf.glide !== 'custom';
   ['pf-glidems', 'pf-glidems-v'].forEach(id => $('#' + id).classList.toggle('off-ctl', perf.glide !== 'custom')); $('label[for=pf-glidems]').classList.toggle('off-ctl', perf.glide !== 'custom');
-  $('#pf-pattern').value = perf.pattern; $('#pf-rate').value = perf.rate;
-  const off = perf.arp === 'off'; document.querySelectorAll('.arp-only').forEach(e => e.classList.toggle('dim', off));
+  // with a patch: the layer being edited can follow the master arpeggiator, run its own, or play straight;
+  // pattern, rate, octaves, gate and swing then edit the arpeggiator that layer plays
+  const ly = curLayer(), la = ly?.arp, own = la?.mode === 'own', A = own ? la : perf;
+  document.querySelectorAll('.ly-arp').forEach(e => e.hidden = !ly);
+  if (ly) { set('pf-larp', 'data-v', la?.mode || 'master'); $('#pf-larp-n').textContent = state.layerIdx + 1; }
+  set('pf-oct', 'data-v', A.oct); r('pf-gate', A.gate, A.gate + '%'); r('pf-swing', A.swing, A.swing + '%');
+  $('#pf-pattern').value = A.pattern; $('#pf-rate').value = A.rate;
+  const off = perf.arp === 'off' && !own; document.querySelectorAll('.arp-only').forEach(e => e.classList.toggle('dim', off));
+  ['pf-pattern', 'pf-rate', 'pf-oct', 'pf-gate', 'pf-swing'].forEach(id => { const e = $('#' + id); const lab = document.querySelector(`label[for=${id}]`) || e?.previousElementSibling; lab?.classList.toggle('larp-own', own); });
   $('#pf-tempo').disabled = perf.sync === 'clock';
   // what the preset itself asks for
   let info = '';
@@ -4310,8 +4376,8 @@ function perfEdit(fn) {
   const wasArp = perf.arp;
   fn(perf);
   if (wasArp !== perf.arp) {
-    if (perf.arp === 'off') { arpStop(true); }
-    else if (wasArp === 'latch' && perf.arp === 'on') { arp.keys = arp.keys.filter(k => k.down); if (!arp.keys.length) arpStop(); }
+    if (perf.arp === 'off') { arpStop(true, arp); }
+    else if (wasArp === 'latch' && perf.arp === 'on') { arp.keys = arp.keys.filter(k => k.down); if (!arp.keys.length) arpStop(false, arp); }
   }
   if (state.current?.type === 'patch') { const pt = curPatch(); if (pt) { pt.perf = { ...perf }; pt.dirty = true; } }
   try { localStorage.setItem('exw.perf', JSON.stringify(perf)); } catch {}
@@ -4320,11 +4386,23 @@ function perfEdit(fn) {
 }
 function perfBind() {
   const seg = (id, key, num) => $('#' + id).addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (b) perfEdit(p => { p[key] = num ? +b.dataset.v : b.dataset.v; }); });
-  seg('pf-keys', 'keys'); seg('pf-glide', 'glide'); seg('pf-arp', 'arp'); seg('pf-oct', 'oct', true); seg('pf-sync', 'sync');
+  // pattern, rate, octaves, gate, swing: the edited layer's own arpeggiator when it has one, else the master
+  const arpEdit = fn => { const la = curLayer()?.arp; if (la?.mode === 'own') { fn(la); markDirty(); perfRender(); } else perfEdit(fn); };
+  const aseg = (id, key, num) => $('#' + id).addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (b) arpEdit(p => { p[key] = num ? +b.dataset.v : b.dataset.v; }); });
+  seg('pf-keys', 'keys'); seg('pf-glide', 'glide'); seg('pf-arp', 'arp'); aseg('pf-oct', 'oct', true); seg('pf-sync', 'sync');
   const rng = (id, key) => $('#' + id).addEventListener('input', e => perfEdit(p => { p[key] = +e.target.value; }));
-  rng('pf-glidems', 'glideMs'); rng('pf-gate', 'gate'); rng('pf-swing', 'swing'); rng('pf-tempo', 'tempo');
-  $('#pf-pattern').addEventListener('change', e => perfEdit(p => { p.pattern = e.target.value; }));
-  $('#pf-rate').addEventListener('change', e => perfEdit(p => { p.rate = e.target.value; }));
+  const arng = (id, key) => $('#' + id).addEventListener('input', e => arpEdit(p => { p[key] = +e.target.value; }));
+  rng('pf-glidems', 'glideMs'); arng('pf-gate', 'gate'); arng('pf-swing', 'swing'); rng('pf-tempo', 'tempo');
+  $('#pf-pattern').addEventListener('change', e => arpEdit(p => { p.pattern = e.target.value; }));
+  $('#pf-rate').addEventListener('change', e => arpEdit(p => { p.rate = e.target.value; }));
+  $('#pf-larp').addEventListener('click', e => {
+    const b = e.target.closest('[data-v]'), ly = curLayer(); if (!b || !ly) return;
+    ly.arp = { ...newLayerArp(), ...(ly.arp || {}) };
+    if (ly.arp.mode === b.dataset.v) return;
+    // a layer going its own way starts from the master's pattern
+    if (b.dataset.v === 'own' && ly.arp.mode !== 'own') Object.assign(ly.arp, { pattern: perf.pattern, rate: perf.rate, oct: perf.oct, gate: perf.gate, swing: perf.swing });
+    ly.arp.mode = b.dataset.v; arpStop(true, larps[state.layerIdx]); markDirty(); perfRender();
+  });
   try { const s = JSON.parse(localStorage.getItem('exw.perf')); if (s && typeof s === 'object') for (const k in perf) if (typeof s[k] === typeof perf[k]) perf[k] = s[k]; } catch {}
   if (!ARP_RATES[perf.rate]) perf.rate = '1/16';
   perf.arp = 'off'; // the arpeggiator always starts switched off
@@ -5446,7 +5524,7 @@ function engineSnapshot() {
   if (pt) {
     s.mf = pt.mfilter || newMaster();
     s.layers = pt.layers.map(ly => ({ src: ly.src ? srcOf(resolveLayer(ly)) : null, on: ly.on, solo: ly.solo, volDb: ly.volDb, pan: ly.pan, coarse: ly.coarse, fine: ly.fine,
-      key: ly.key, vel: ly.vel, useSrcEnv: ly.useSrcEnv, env: ly.env, filter: ly.filter, lfos: lfosFor({ ly }), fgs: fgsFor({ ly }), sendA: ly.sendA, sendB: ly.sendB }));
+      key: ly.key, vel: ly.vel, useSrcEnv: ly.useSrcEnv, env: ly.env, filter: ly.filter, lfos: lfosFor({ ly }), fgs: fgsFor({ ly }), sendA: ly.sendA, sendB: ly.sendB, arp: ly.arp || newLayerArp() }));
   }
   return s;
 }
@@ -5616,6 +5694,8 @@ addEventListener('keydown', e => {
 }, true);
 
 // ---------- what's different in a plugin window ----------
+const arpShowWeb = arpShow;
+arpShow = () => { arpShowWeb(); const ck = $('#arp-clock'); if (ck) ck.textContent = perf.sync === 'clock' ? '· following your DAW’s tempo' : ''; };
 function pluginFace() {
   $('#btn-sound').hidden = true; $('#midi-sel').hidden = true;
   $('#midi-txt').textContent = 'MIDI from host';
@@ -5638,6 +5718,7 @@ async function onNative(m) {
     step('My patches', () => { if (Array.isArray(m.patches) && m.patches.length) { savedLib = m.patches.slice(); loadPatchJSON(JSON.stringify({ format: PATCH_FORMAT, patches: savedLib }), 'Patch'); renderList(); } });
     step('master', () => { if (typeof m.params?.master === 'number') setMaster(m.params.master); });
     if (m.params && typeof m.params === 'object') Object.assign(sentParams, m.params);
+    if (!m.ui) { perf.sync = 'clock'; perfRender(); }   // a new plugin follows the DAW's tempo
     if (m.loading) progress(m.status || 'Loading…');
     if (m.bank) {
       await nativeBank(m.bank);
@@ -5680,7 +5761,7 @@ async function onNative(m) {
     if (Array.isArray(m.midi)) for (const v of m.midi) midiShow(v & 255, (v >> 8) & 255, (v >> 16) & 255, true);
     if (Array.isArray(m.knobs)) MIDI_AP.forEach((k, i) => { if (Math.abs((ctrl.val[k] ?? 0) - m.knobs[i]) > .004) { setCtrl(k, m.knobs[i]); sentKnobs[i] = m.knobs[i]; } });
     if ('loading' in m) { if (m.loading) progress(m.status || 'Loading…', m.progress, 1); else progress(null); if (!m.loading && m.status && /^(Couldn|No |Not an|Bank not)/.test(m.status)) toast(m.status); }
-    if (perf.arp !== 'off') { const h = $('#arp-held'); if (h) h.textContent = m.arp ? m.arp + ' key' + (m.arp > 1 ? 's' : '') + ' held' : 'hold some keys'; }
+    if (perf.arp !== 'off' || curPatch()?.layers.some(l => l.src && l.arp?.mode === 'own')) { const h = $('#arp-held'); if (h) h.textContent = m.arp ? m.arp + ' key' + (m.arp > 1 ? 's' : '') + ' held' : 'hold some keys'; }
     if (m.select) { const i = state.presets.findIndex(p => p.name === m.select); if (i >= 0 && !(state.current?.type === 'preset' && state.current.key === i)) { state.tab = 'pre'; await selectPreset(i); renderList(); revealCurrent?.(); } }
   } else if (m.type === 'hostParams') { onHostParams(m.values || {});
   } else if (m.type === 'learned') { if (learnIdx === m.index) learnCc(m.cc);

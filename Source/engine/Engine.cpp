@@ -53,7 +53,7 @@ Settings::Settings() { for (int i = 0; i < 16; ++i) apCC[(size_t) i] = AP_DEFAUL
 int Engine::apSrc (int i) { return MIDI_AP[std::max (0, std::min (15, i))]; }
 
 Engine::Engine (Settings& s) : set (s) {
-    voices.resize (SLOTS); susHeld.assign (128, false); susPending.assign (128, false);
+    voices.resize (SLOTS); susHeld.assign (128, false); susPending.assign (128, 0);
     for (int k = 0; k < 8; ++k) { driftFrom[k] = 0; driftTo[k] = (float) (std::uniform_real_distribution<> (-1, 1) (rng)); }
 }
 
@@ -309,6 +309,7 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     if (! nvp) { for (auto& x : voices) if (! nvp || (x.releasing && ! nvp->releasing) || (x.releasing == nvp->releasing && x.age < nvp->age)) nvp = &x; }
     NoteVoice& nv = *nvp;
     nv = NoteVoice();
+    if (slotIdx >= 0 && slotIdx < 4) ++started[(size_t) slotIdx];
     nv.active = true; nv.note = note; nv.startNote = note; nv.vel = vel; nv.age = ++ageCounter; nv.s = s; nv.vd = &v; nv.pre = sl ? sl->preset : nullptr; nv.monoGroup = group;
     nv.slot = slotIdx; nv.layer = sl && sl->layer; nv.pv = sl && sl->isPreset && (! prog || prog->pmod);
     nv.liveCents0 = sl ? slotCents (*sl) : 0.0f;
@@ -420,15 +421,15 @@ void Engine::fgAdvance (const FgDef& f, FgRun& r, double dt) {
 }
 
 // ---------- notes ----------
-void Engine::noteOn (int note, int vel) {
+void Engine::noteOn (int note, int vel, int mask) {
     if (mfHeld++ == 0) mfEStage = 0;   // the master filter envelope starts with the first key down
     if (note < 0 || note > 127) return;
     vel = std::max (1, std::min (127, vel));
     susHeld[(size_t) note] = true;
-    if (susPending[(size_t) note]) { susPending[(size_t) note] = false; noteOffNow (note); }
+    if (int pm = susPending[(size_t) note] & mask) { susPending[(size_t) note] = (uint8_t) (susPending[(size_t) note] & ~pm); noteOffNow (note, pm); }
     int prev = lastNote; lastNote = note;
     if (! prog || ! bank) return;
-    for (int i = 0; i < prog->nSlots; ++i) playSlot (i, note, vel, prev);
+    for (int i = 0; i < prog->nSlots; ++i) if (mask & (1 << i)) playSlot (i, note, vel, prev);
 }
 
 void Engine::playSlot (int i, int note, int vel, int prev) {
@@ -455,17 +456,17 @@ float Engine::slotLevel (int i) const {
     return std::pow (10.0f, l.volDb / 20.0f);
 }
 
-void Engine::noteOff (int note) {
+void Engine::noteOff (int note, int mask) {
     if (mfHeld > 0 && --mfHeld == 0) mfEStage = 2;
     if (note < 0 || note > 127) return;
     susHeld[(size_t) note] = false;
-    if (sustain) { susPending[(size_t) note] = true; return; }
-    noteOffNow (note);
+    if (sustain) { susPending[(size_t) note] = (uint8_t) (susPending[(size_t) note] | mask); return; }
+    noteOffNow (note, mask);
 }
 
-void Engine::noteOffNow (int note) {
-    monoOff (note);
-    for (auto& v : voices) if (v.active && ! v.releasing && v.note == note) releaseVoice (v);
+void Engine::noteOffNow (int note, int mask) {
+    monoOff (note, mask);
+    for (auto& v : voices) if (v.active && ! v.releasing && v.note == note && (v.slot < 0 || (mask & (1 << v.slot)))) releaseVoice (v);
 }
 
 namespace { int prioOf (int m) { return m == 3 || m == 6 ? 1 : m == 4 || m == 7 ? 2 : 0; } }
@@ -499,9 +500,10 @@ void Engine::monoOn (int note, int vel, const Voice& v, const Zone& z, int m) {
     lastSolo[(size_t) gi] = note;
 }
 
-void Engine::monoOff (int note) {
+void Engine::monoOff (int note, int mask) {
     for (size_t gi = 0; gi < monoGroups.size(); ++gi) {
         auto& g = monoGroups[gi];
+        if (g.slot >= 0 && ! (mask & (1 << g.slot))) continue;
         bool had = false; for (auto& h : g.held) if (h.first == note) had = true;
         if (! had) continue;
         g.held.erase (std::remove_if (g.held.begin(), g.held.end(), [&] (auto& h) { return h.first == note; }), g.held.end());
@@ -524,7 +526,7 @@ void Engine::controller (int cc, int value) {
     for (int i = 0; i < 16; ++i) if (set.apCC[(size_t) i].load() == cc) { ctrlVal[MIDI_AP[i]] = v; apChanged.fetch_or (1 << i); }
     if (cc == 64) {
         bool down = value >= 64;
-        if (! down && sustain) { sustain = false; for (int n = 0; n < 128; ++n) if (susPending[(size_t) n]) { susPending[(size_t) n] = false; if (! susHeld[(size_t) n]) noteOffNow (n); } }
+        if (! down && sustain) { sustain = false; for (int n = 0; n < 128; ++n) if (int pm = susPending[(size_t) n]) { susPending[(size_t) n] = 0; if (! susHeld[(size_t) n]) noteOffNow (n, pm); } }
         sustain = down;
     }
     else if (cc == 1) ctrlVal[17] = v;
@@ -541,7 +543,7 @@ int Engine::programChange (int pc) const {
 }
 void Engine::allNotesOff() {
     mfHeld = 0; if (mfEStage < 2) mfEStage = 2;
-    sustain = false; std::fill (susPending.begin(), susPending.end(), false); std::fill (susHeld.begin(), susHeld.end(), false);
+    sustain = false; std::fill (susPending.begin(), susPending.end(), (uint8_t) 0); std::fill (susHeld.begin(), susHeld.end(), false);
     for (auto& v : voices) if (v.active) releaseVoice (v);
     for (auto& g : monoGroups) g.held.clear();
 }
