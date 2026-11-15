@@ -163,7 +163,7 @@ const juce::String ExwProcessor::getProgramName (int index) {
 }
 
 void ExwProcessor::loadBankAsync (const juce::File& exb) {
-    if (loading.exchange (true)) return;
+    if (loading.exchange (true)) { queuedBank = exb; const juce::SpinLock::ScopedLockType l (bankLock); status = "Loading… then " + exb.getFileName(); return; }
     if (loader && loader->joinable()) loader->join();
     progress = 0;
     { const juce::SpinLock::ScopedLockType l (bankLock); status = "Loading " + exb.getFileName() + "…"; }
@@ -195,6 +195,7 @@ void ExwProcessor::loadBankAsync (const juce::File& exb) {
                 updateHostDisplay (ChangeDetails().withProgramChanged (true));
             }
             loading = false; ++bankVer;
+            if (queuedBank != juce::File()) { auto q = queuedBank; queuedBank = juce::File(); loadBankAsync (q); }
         });
     });
 }

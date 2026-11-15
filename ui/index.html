@@ -5465,11 +5465,26 @@ download = (bytes, name, type) => {
     toNative({ type: 'saveFile', name, i, n, chunk: btoa(bin) });
   }
 };
-const grab = (sel, fn) => document.querySelector(sel)?.addEventListener('click', e => { e.stopImmediatePropagation(); e.preventDefault(); fn(); }, true);
-grab('#btn-folder', () => toNative({ type: 'openBank' }));
-grab('#btn-files', () => toNative({ type: 'openFiles' }));
-grab('#btn-addpool', () => toNative({ type: 'openBank' }));
-grab('#btn-addzip', () => toNative({ type: 'openBank' }));
+// caught on the window, before anything on the button itself: on a Mac the web view runs a button's own listeners
+// in the order they were added, so the page's Chrome-only folder picker would start too (and read a whole folder)
+const GRAB = [];
+const grab = (sel, fn) => GRAB.push([sel, fn]);
+addEventListener('click', e => {
+  for (const [sel, fn] of GRAB) { if (e.target.closest?.(sel)) { e.stopImmediatePropagation(); e.preventDefault(); fn(); return; } }
+}, true);
+// nothing in the page may open the web view's own file pickers: they all go to the plugin's file window
+window.showDirectoryPicker = undefined; window.showOpenFilePicker = undefined;
+const inputClick = HTMLInputElement.prototype.click;
+HTMLInputElement.prototype.click = function () {
+  if (this.type === 'file') { toNative({ type: this.hasAttribute('webkitdirectory') ? 'openBank' : 'openFiles' }); return; }
+  return inputClick.call(this);
+};
+let openAsked = 0;
+const askOpen = type => { const now = Date.now(); if (now - openAsked < 800) return; openAsked = now; toNative({ type }); };
+grab('#btn-folder', () => askOpen('openBank'));
+grab('#btn-files', () => askOpen('openFiles'));
+grab('#btn-addpool', () => askOpen('openBank'));
+grab('#btn-addzip', () => askOpen('openBank'));
 grab('#btn-forget', () => { toNative({ type: 'forget' }); toast('Xtreme Lab won’t reopen this bank by itself any more.'); $('#btn-forget').hidden = true; });
 grab('#btn-midi', () => {});
 addEventListener('drop', e => {

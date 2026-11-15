@@ -15,7 +15,7 @@ private:
     ExwProcessor& proc;
     juce::WebBrowserComponent web;
     std::unique_ptr<juce::FileChooser> chooser;
-    bool ready = false;
+    bool ready = false, chooserOpen = false;
     int sentBankVer = -1; float sentKnobs[16] {}; juce::String sentStatus; bool sentLoading = false;
     juce::MemoryBlock saveBuf; juce::String saveName;
     std::map<juce::String, float> uiKnown;   // parameter values the panel already has

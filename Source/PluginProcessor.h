@@ -71,7 +71,7 @@ public:
 
     juce::AudioProcessorValueTreeState params;
     exw::Settings settings;
-    juce::File lastBankFile;
+    juce::File lastBankFile, queuedBank;   // queued: picked while another bank was still loading
     juce::PropertiesFile& userSettings();
 
 private:

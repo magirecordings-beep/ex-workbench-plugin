@@ -152,9 +152,13 @@ void ExwEditor::handle (const juce::var& m) {
         auto recent = juce::File (proc.userSettings().getValue ("recentBank"));
         auto start = proc.lastBankFile.existsAsFile() ? proc.lastBankFile.getParentDirectory() : recent.existsAsFile() ? recent.getParentDirectory() : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
         const bool files = type == "openFiles";
+        // one file window at a time: a second click must not close the one that is already open
+        if (chooserOpen) { send (obj ({ { "type", "toast" }, { "text", "The file window is already open (it may be behind Ableton’s window)." } })); return; }
+        chooserOpen = true;
         chooser = std::make_unique<juce::FileChooser> (files ? "Open an Emulator X bank (.exb) or Xtreme Lab patches (.exwp)" : "Open an Emulator X bank (.exb). Its SamplePool is found next to it automatically.",
-                                                       start, files ? "*.exb;*.exwp;*.json" : "*.exb");
+                                                       start, files ? "*.exb;*.exwp;*.json" : "*.exb", true, false, this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | (files ? juce::FileBrowserComponent::canSelectMultipleItems : 0), [this] (const juce::FileChooser& fc) {
+            chooserOpen = false;
             for (auto& f : fc.getResults()) {
                 if (f.hasFileExtension ("exb")) proc.loadBankAsync (f);
                 else if (f.existsAsFile()) send (obj ({ { "type", "patchFile" }, { "name", f.getFileNameWithoutExtension() }, { "text", f.loadFileAsString() } }));
@@ -173,7 +177,7 @@ void ExwEditor::handle (const juce::var& m) {
         if ((int) m["i"] == (int) m["n"] - 1) {
             auto dir = juce::File::getSpecialLocation (juce::File::userDesktopDirectory);
             auto ext = saveName.fromLastOccurrenceOf (".", false, false);
-            chooser = std::make_unique<juce::FileChooser> ("Save " + saveName, dir.getChildFile (saveName), ext.isNotEmpty() ? "*." + ext : "*");
+            chooser = std::make_unique<juce::FileChooser> ("Save " + saveName, dir.getChildFile (saveName), ext.isNotEmpty() ? "*." + ext : "*", true, false, this);
             chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc) {
                 auto f = fc.getResult(); if (f == juce::File()) return;
                 if (f.replaceWithData (saveBuf.getData(), saveBuf.getSize())) send (obj ({ { "type", "toast" }, { "text", "Saved " + f.getFileName() } }));
