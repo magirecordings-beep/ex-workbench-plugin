@@ -149,6 +149,7 @@ function syncEngine() {
 // the A-P knobs and their MIDI numbers
 const sentKnobs = Array(16).fill(-1); let sentApcc = '';
 function syncKnobs() {
+  if (!restoredDone) return;
   const v = MIDI_AP.map(k => ctrl.val[k] ?? 0);
   if (v.some((x, i) => Math.abs(x - sentKnobs[i]) > 1e-4)) { v.forEach((x, i) => sentKnobs[i] = x); toNative({ type: 'knobs', values: v }); }
   const a = JSON.stringify(AP_CC); if (a !== sentApcc) { sentApcc = a; toNative({ type: 'apcc', list: AP_CC }); }
@@ -182,8 +183,9 @@ function paramMap() {
 }
 const sentParams = {};
 function syncParams() {
+  if (!restoredDone) return;   // until the start-up state is in, the page's defaults are not the plugin's settings
   let m; try { m = paramMap(); } catch (e) { return; }
-  for (const [id, v] of Object.entries(m)) { if (typeof v !== 'number' || !isFinite(v)) continue; if (sentParams[id] !== v) { sentParams[id] = v; toNative({ type: 'param', id, value: v }); } }
+  for (const [id, v] of Object.entries(m)) { if (typeof v !== 'number' || !isFinite(v)) continue; const s = sentParams[id]; if (typeof s !== 'number' || Math.abs(s - v) > 1e-4 * Math.max(1, Math.abs(v))) { sentParams[id] = v; toNative({ type: 'param', id, value: v }); } }
 }
 
 // ---------- the panel's state, kept with the DAW project ----------
@@ -322,6 +324,7 @@ async function onNative(m) {
     step('MIDI numbers', () => { if (Array.isArray(m.apcc)) { AP_CC = m.apcc.slice(); sentApcc = JSON.stringify(AP_CC); } });
     step('My patches', () => { if (Array.isArray(m.patches) && m.patches.length) { savedLib = m.patches.slice(); loadPatchJSON(JSON.stringify({ format: PATCH_FORMAT, patches: savedLib }), 'Patch'); renderList(); } });
     step('master', () => { if (typeof m.params?.master === 'number') setMaster(m.params.master); });
+    if (m.params && typeof m.params === 'object') Object.assign(sentParams, m.params);
     if (m.loading) progress(m.status || 'Loading…');
     if (m.bank) {
       await nativeBank(m.bank);
@@ -336,6 +339,7 @@ async function onNative(m) {
     else if (m.status && /not found/i.test(m.status)) toast(m.status + '. Press Open bank to find it.');
     $('#btn-forget').hidden = !m.bank && !m.recent;
     step('host parameters', () => { if (m.hostParams) onHostParams(m.hostParams); });
+    sentSel = selKey();   // the plugin already plays this: the first update must not stop its notes
     restoredDone = true; toNative({ type: 'restored' });
     syncAll();
   } else if (m.type === 'bank') {
@@ -351,7 +355,7 @@ async function onNative(m) {
   } else if (m.type === 'status') {
     // the plugin has a bank this page hasn't shown (a message got lost, the window was reopened): read it now
     if (m.bankVer && m.bankVer !== bankLoaded && !bankBusy && !m.loading && Date.now() > bankRetryAt && (restoredDone || Date.now() - bootAt > 6000)) {
-      if (!restoredDone) { restoredDone = true; }
+      if (!restoredDone) { restoredDone = true; sentSel = selKey(); }
       const had = !!state.presets.length;
       nativeBank({ name: m.bankName, ver: m.bankVer }).then(async () => {
         if (!had && bankLoaded > 0 && !state.current) { const i = state.presets.findIndex(p => p.def); if (i >= 0) { state.tab = 'pre'; renderList(); await selectPreset(i); } }
