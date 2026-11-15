@@ -96,7 +96,7 @@ private:
         // filter envelope: the stages move between a base and a peak shape (filter + env amount) with an ADSR value fe;
         // knob moves glide base and peak to their new shapes (as the browser version's voice filter worklet)
         StageSpec eb[6] {}, ep[6] {}, ebT[6] {}, epT[6] {}; bool fMoving = false; float fe = 0, feA = 0, feD = .8f, feS = 0, feR = .3f; int feStage = 3, feHold = 0; int stDelay = 0;
-        int filtRule = 0; float filtQ = 0; int progVer = -1; float presetCents = 0, presetNow = 0;   // 0 own preset filter, 1 preset + shift, 2 panel filter, 3 layer filter
+        int filtRule = 0; float filtQ = 0, qFixed = 0, lfoOct[2] {}, lfoOctFixed[2] {}; int progVer = -1; float presetCents = 0, presetNow = 0;   // 0 own preset filter, 1 preset + shift, 2 panel filter, 3 layer filter
         // unison copies (1 = plain)
         std::vector<Copy> copies; bool stereoPath = false;
         float panNow = 0;
@@ -151,7 +151,7 @@ private:
     void startNote (int note, int vel, const Voice& v, const Zone& z, int glideFrom, bool solo, int monoGroup);
     void releaseVoice (NoteVoice& nv);
     void noteOffNow (int note, int mask = 0xF);
-    void planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fixed[8]);
+    void planMod (NoteVoice& nv, const Voice& v, int note, int vel, float* fixed);
 
     void setBiquad (Biquad& b, const StageSpec& s, float cents);
     float glideTime (const Voice* vd, int from, int to) const;

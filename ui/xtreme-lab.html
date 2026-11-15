@@ -3513,7 +3513,7 @@ function presetLayers(def, note, vel, out, ly) {
     const own = v.envs[0] ? presetEnvSec(v.envs[0]) : null;
     const env = ly ? (ly.useSrcEnv && own ? own : ly.env) : (envState.source === 'preset' && own ? own : envState.env);
     out.push({
-      sample: z.ref, env, vfilt: v.filter, ly, pv: P.pmod.v ? v : null, vd: v, note,
+      ownEnv: !!own && env === own, sample: z.ref, env, vfilt: v.filter, ly, pv: P.pmod.v ? v : null, vd: v, note,
       baseSemis: k - z.root + v.coarse + (v.fine + z.fine) / 100, baseGain: Math.pow(10, v.volDb / 20), basePan: v.pan / 64
     });
   }
@@ -3760,7 +3760,12 @@ function makeVoiceFilter(c, spec, t, channels = 1) {
    = hard left/right. Cord N Amount destinations (168-191) add to cord N. Unsupported sources count as zero. */
 const PM = {
   DST_PITCH: 48, DST_FINE: 47, DST_FILT: 56, DST_Q: 57, DST_VOL: 64, DST_PAN: 65,
-  scale: { 48: 3600, 47: 100, 56: 10140, 57: 100, 64: 72, 65: 1 },
+  scale: { 48: 3600, 47: 100, 56: 10140, 57: 100, 64: 72, 65: 1,
+    // envelope rates (amp 72-75, filter 80-83, aux 88-91: all, attack, decay, release; +100% = the whole rate range faster)
+    // and LFO 1 / 2 rate (96, 104: octaves, 100% = 8 octaves)
+    72: 1, 73: 1, 74: 1, 75: 1, 80: 1, 81: 1, 82: 1, 83: 1, 88: 1, 89: 1, 90: 1, 91: 1, 96: 8, 104: 8 },
+  // set once per note (controllers count at their position when the key goes down)
+  ONCE: new Set([57, 72, 73, 74, 75, 80, 81, 82, 83, 88, 89, 90, 91, 96, 104]),
   ENV: { 72: ['vol', '+'], 73: ['vol', '~'], 74: ['vol', '<'], 80: ['fil', '+'], 81: ['fil', '~'], 82: ['fil', '<'], 88: ['aux', '+'], 89: ['aux', '~'], 90: ['aux', '<'] },
   LFO: { 96: [0, '~'], 97: [0, '+'], 104: [1, '~'], 105: [1, '+'] },
   CTRL: Object.fromEntries([16, 17, 18, 19, 20, 21, 32, 33, 34, 35, 36, 37, 40, 41, 42, 43, 44, 45, 46, 47].map(k => [k, k]))
@@ -3778,28 +3783,33 @@ function staticSource(src, note, vel) {
 // E-MU LFO shape code -> playable shape (the two bank defaults; everything else plays as a sine for now)
 const pmShape = code => ({ 16: 'triangle', 19: 'sine' }[code] || 'sine');
 // one envelope as a control signal (0..1) following E-MU's six stages, released with the note
-function envSignal(c, env, t) {
+function envSignal(c, env, t, fixed, base) {
+  if (fixed) env = shiftEnv(env, fixed, base);
   const cs = c.createConstantSource(); cs.offset.setValueAtTime(0, t);
   const pts = [[t, 0]];
   let tt = t; for (let i = 0; i < 4; i++) { tt += Math.max(i ? 0 : .002, rateSec(env[i].t)); const lv = Math.max(-1, Math.min(1, env[i].l / 100)); cs.offset.linearRampToValueAtTime(lv, tt); pts.push([tt, lv]); }
   cs.start(t); return { cs, env, pts };
 }
 // plan before the voice is built: fixed offsets per destination, and the live/dynamic routes to wire later
+// how much a preset envelope's segment i (0-5) is sped up (+) or slowed down (-) by its rate cords, in rate units
+const envRateOfs = (fixed, base, i) => (fixed?.[base] || 0) + (fixed?.[base + (i < 2 ? 1 : i < 4 ? 2 : 3)] || 0);
+const shiftEnv = (e, fixed, base) => e.map((g, i) => ({ ...g, t: Math.max(0, Math.min(1, g.t - envRateOfs(fixed, base, i))) }));
 function planMod(pv, note, vel) {
-  const cords = pv.cords || [], amt = cords.map(c => c.amt), live = cords.map(() => []);
+  // Emulator X has two codes for filter resonance; both count as one
+  const cords = (pv.cords || []).map(c => c.dst === 58 ? { ...c, dst: 57 } : c), amt = cords.map(c => c.amt), live = cords.map(() => []);
   // cord-amount cords first: fixed sources change amounts now, controllers change them live
   cords.forEach(c => {
     if (c.dst < 168 || c.dst > 191) return; const tgt = c.dst - 168; if (!cords[tgt]) return;
     const sv = staticSource(c.src, note, vel);
     if (sv !== null) amt[tgt] += c.amt * sv; else if (PM.CTRL[c.src]) live[tgt].push({ ctrl: c.src, amt: c.amt });
   });
-  const plan = { fixed: { 48: 0, 47: 0, 56: 0, 57: 0, 64: 0, 65: 0 }, routes: [] };
+  const plan = { fixed: Object.fromEntries(Object.keys(PM.scale).map(k => [k, 0])), routes: [] };
   cords.forEach((c, i) => {
     const sc = PM.scale[c.dst]; if (sc === undefined) return;
     if (c.src === 16 && (c.dst === PM.DST_PITCH || c.dst === PM.DST_FINE) && !P.bendp.v) return; // the global bend range handles pitch then
     const a = amt[i] / 100;
     // resonance is fixed per note, so controllers count at their current position
-    const sv = c.dst === PM.DST_Q && PM.CTRL[c.src] ? ctrl.val[c.src] : staticSource(c.src, note, vel);
+    const sv = PM.ONCE.has(c.dst) && PM.CTRL[c.src] ? (ctrl.val[c.src] ?? 0) : staticSource(c.src, note, vel);
     if (sv !== null) { plan.fixed[c.dst] += a * sv * sc; live[i].forEach(x => plan.routes.push({ kind: 'ctrl', ctrl: x.ctrl, dst: c.dst, gain: x.amt / 100 * sv * sc })); return; }
     const env = PM.ENV[c.src], lfo = PM.LFO[c.src], ct = PM.CTRL[c.src];
     if (!env && !lfo && !ct) return;
@@ -3816,10 +3826,10 @@ function planMod(pv, note, vel) {
 function wireMod(c, v, plan, pv, t) {
   v.modEnvs = []; v.modLfos = [];
   const envs = {}, lfos = {};
-  const getEnv = w => envs[w] ||= (() => { const e = w === 'vol' ? pv.envs[0] : w === 'fil' ? pv.envs[1] : pv.envs[2]; if (!e) return null; const s = envSignal(c, e, t); v.modEnvs.push(s); return s.cs; })();
+  const getEnv = w => envs[w] ||= (() => { const e = w === 'vol' ? pv.envs[0] : w === 'fil' ? pv.envs[1] : pv.envs[2]; if (!e) return null; const s = envSignal(c, e, t, plan.fixed, w === 'vol' ? 72 : w === 'fil' ? 80 : 88); v.modEnvs.push(s); return s.cs; })();
   const getLfo = i => lfos[i] ||= (() => {
     const L = pv.plfos?.[i]; if (!L) return null;
-    const src = makeLfoSource(c, { shape: pmShape(L.shape), rate: L.rate }, t); v.modLfos.push(src);
+    const src = makeLfoSource(c, { shape: pmShape(L.shape), rate: Math.max(.01, Math.min(50, L.rate * Math.pow(2, plan.fixed[i ? 104 : 96] || 0))) }, t); v.modLfos.push(src);
     if (!L.delay) return src.out;
     const fade = c.createGain(); fade.gain.setValueAtTime(0, t); fade.gain.linearRampToValueAtTime(1, t + rateSec(L.delay)); src.out.connect(fade); return fade;
   })();
@@ -4096,6 +4106,8 @@ function startLayer(note, vel, l, glideFrom, at, solo) {
   src.playbackRate.value = liveRate(l);
   if (P.loop.v && s.loop) { src.loop = true; src.loopStart = s.loopStart / s.rate; src.loopEnd = (s.loopEnd + 1) / s.rate; }
   const plan = l.pv ? planMod(l.pv, l.note ?? note, vel) : null;
+  // the preset's own amp envelope, with its rate cords (Attack / Dcy-Rls knobs and the like)
+  if (plan && l.ownEnv && l.pv.envs?.[0]) l = { ...l, env: presetEnvSec(shiftEnv(l.pv.envs[0], plan.fixed, 72)) };
   let spec = specFor(l);
   if (plan && spec.type !== 'bypass' && plan.fixed[PM.DST_Q]) spec = { ...spec, res: Math.max(0, Math.min(100, spec.res + plan.fixed[PM.DST_Q])) };
   const vf = makeVoiceFilter(ctx, spec, t, (s.data && s.data.length > 1) ? 2 : 1);

@@ -10,13 +10,22 @@ constexpr double PI = 3.14159265358979323846;
 constexpr int MAX_NOTES = 40, SLOTS = 72, SUB = 16;
 constexpr int MIDI_AP[16] = { 20, 21, 32, 33, 34, 35, 36, 37, 40, 41, 42, 43, 44, 45, 46, 47 };
 constexpr int AP_DEFAULT_CC[16] = { 21, 22, 23, 24, 25, 26, 27, 28, 70, 71, 72, 73, 91, 93, 82, 83 };
-enum { DST_FINE = 47, DST_PITCH = 48, DST_FILT = 56, DST_Q = 57, DST_VOL = 64, DST_PAN = 65 };
+enum { DST_FINE = 47, DST_PITCH = 48, DST_FILT = 56, DST_Q = 57, DST_Q2 = 58, DST_VOL = 64, DST_PAN = 65, DST_LFO1 = 96, DST_LFO2 = 104 };
+// fixed[] slots: 0 pitch, 1 fine, 2 filter, 3 resonance, 4 volume, 5 pan, 6/7 LFO 1/2 rate (octaves),
+// 8-11 amp envelope rates (all, attack, decay, release), 12-15 filter envelope, 16-19 aux envelope (rate units, + faster)
+constexpr int NFIX = 20;
+bool envRateDst (int d) { return (d >= 72 && d <= 75) || (d >= 80 && d <= 83) || (d >= 88 && d <= 91); }
 enum { K_ENV, K_LFO, K_CTRL };
 
 float dstScale (int d) {
-    switch (d) { case DST_PITCH: return 3600; case DST_FINE: return 100; case DST_FILT: return 10140; case DST_Q: return 100; case DST_VOL: return 72; case DST_PAN: return 1; default: return 0; }
+    if (envRateDst (d)) return 1;
+    switch (d) { case DST_PITCH: return 3600; case DST_FINE: return 100; case DST_FILT: return 10140; case DST_Q: case DST_Q2: return 100; case DST_VOL: return 72; case DST_PAN: return 1;
+                 case DST_LFO1: case DST_LFO2: return 8; default: return 0; }
 }
-int dstSlot (int d) { switch (d) { case DST_PITCH: return 0; case DST_FINE: return 1; case DST_FILT: return 2; case DST_Q: return 3; case DST_VOL: return 4; case DST_PAN: return 5; default: return -1; } }
+int dstSlot (int d) {
+    if (d >= 72 && d <= 75) return 8 + d - 72; if (d >= 80 && d <= 83) return 12 + d - 80; if (d >= 88 && d <= 91) return 16 + d - 88;
+    switch (d) { case DST_PITCH: return 0; case DST_FINE: return 1; case DST_FILT: return 2; case DST_Q: case DST_Q2: return 3; case DST_VOL: return 4; case DST_PAN: return 5;
+                 case DST_LFO1: return 6; case DST_LFO2: return 7; default: return -1; } }
 bool isCtrlSrc (int s) {
     if (s >= 16 && s <= 19) return true;
     for (int a : MIDI_AP) if (a == s) return true;
@@ -98,8 +107,8 @@ float Engine::staticSource (int src, int note, int vel) {
 }
 
 // the preset's modulation cords for this note: fixed offsets per destination plus live routes
-void Engine::planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fixed[8]) {
-    for (int i = 0; i < 8; ++i) fixed[i] = 0;
+void Engine::planMod (NoteVoice& nv, const Voice& v, int note, int vel, float* fixed) {
+    for (int i = 0; i < NFIX; ++i) fixed[i] = 0;
     nv.routes.clear();
     const auto& cords = v.cords; size_t nC = cords.size();
     std::vector<float> amt (nC); std::vector<std::vector<std::pair<int, float>>> live (nC);
@@ -116,7 +125,8 @@ void Engine::planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fi
         if (slot < 0) continue;
         if (c.src == 16 && (c.dst == DST_PITCH || c.dst == DST_FINE) && ! own) continue;
         float a = amt[i] / 100.0f;
-        float sv = (c.dst == DST_Q && isCtrlSrc (c.src)) ? ctrlVal[c.src] : staticSource (c.src, note, vel);
+        // envelope rates are taken when the key goes down (a controller counts at its position then)
+        float sv = (envRateDst (c.dst) && isCtrlSrc (c.src)) ? ctrlVal[c.src] : staticSource (c.src, note, vel);
         if (! std::isnan (sv)) {
             fixed[slot] += a * sv * sc;
             for (auto& x : live[i]) nv.routes.push_back ({ K_CTRL, 0, x.first, c.dst, x.second / 100.0f * sv * sc, {} });
@@ -129,7 +139,7 @@ void Engine::planMod (NoteVoice& nv, const Voice& v, int note, int vel, float fi
         if (isEnv) { if (pol == 1) { mul = 2; off = -1; } else if (pol == 2) off = -1; }
         if (isLfo && uniLfo) { mul = .5f; off = .5f; }
         fixed[slot] += a * off * sc;
-        if (c.dst == DST_Q) continue; // resonance is set once per note
+        if (envRateDst (c.dst)) continue;   // (envelopes and LFOs as sources of envelope rates: not played)
         Route r { isEnv ? K_ENV : isLfo ? K_LFO : K_CTRL, which, isCtl ? c.src : 0, c.dst, a * mul * sc, {} };
         for (auto& x : live[i]) r.att.push_back ({ x.first, x.second / 100.0f * mul * sc });
         if (r.gain == 0 && r.att.empty()) continue;
@@ -318,10 +328,16 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     nv.lyG = nv.layer ? slotLevel (slotIdx) : 1.0f;
     for (int k = 0; k < 3; ++k) { nv.ulfoPh[k] = 0; nv.ulfoHold[k][0] = 0; nv.ulfoHold[k][1] = std::uniform_real_distribution<float> (-1, 1) (lfoRng); nv.fg[k] = FgRun(); }
     nv.baseGain = std::pow (10.0f, v.volDb / 20.0f); nv.basePan = std::max (-1.0f, std::min (1.0f, v.pan / 64.0f));
-    float fixed[8] {};
+    float fixed[NFIX] {};
     if (nv.pv) planMod (nv, v, note, vel, fixed);
     nv.fixedPitch = fixed[0] + fixed[1]; nv.fixedFilt = fixed[2]; nv.cordPan = fixed[5];
-    nv.filtQ = fixed[3];
+    nv.qFixed = fixed[3]; nv.lfoOctFixed[0] = fixed[6]; nv.lfoOctFixed[1] = fixed[7];
+    { // where the controllers stand now, so the note starts with them (no sweep from the first block)
+        float q0 = 0, l0[2] { 0, 0 };
+        for (auto& r : nv.routes) if (r.kind == K_CTRL) { float g = r.gain; for (auto& a : r.att) g += ctrlVal[a.first] * a.second; const float c = ctrlVal[r.ctrl] * g;
+            if (r.dst == DST_Q || r.dst == DST_Q2) q0 += c; else if (r.dst == DST_LFO1) l0[0] += c; else if (r.dst == DST_LFO2) l0[1] += c; }
+        nv.filtQ = fixed[3] + q0; nv.lfoOct[0] = fixed[6] + l0[0]; nv.lfoOct[1] = fixed[7] + l0[1];
+    }
     // presets bring their own velocity response through their cords; everything else uses the Velocity knob
     const float vs = prog ? prog->velsens : .7f;
     nv.amp = nv.pv ? std::pow (10.0f, fixed[4] / 20.0f) : (1 - vs) + vs * (vel / 127.0f);
@@ -329,7 +345,9 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     float es[6], el[6];
     const bool own = sl && sl->isPreset && ! v.envs.empty();
     const bool useOwn = own && (sl->layer ? sl->useSrcEnv : (! prog || prog->envFromPreset));
-    if (useOwn) for (int i = 0; i < 6; ++i) { es[i] = rateSec (v.envs[0].t[i]); el[i] = v.envs[0].l[i]; }
+    // rate cords (the Attack / Dcy-Rls knobs): + is faster, over the whole range of the envelope's rates
+    auto rofs = [&] (int base, int i) { return fixed[base] + fixed[base + (i < 2 ? 1 : i < 4 ? 2 : 3)]; };
+    if (useOwn) for (int i = 0; i < 6; ++i) { es[i] = rateSec (v.envs[0].t[i] - rofs (8, i)); el[i] = v.envs[0].l[i]; }
     else { EnvSpec d; const EnvSpec& e = sl && sl->layer ? sl->env : prog ? prog->env : d; for (int i = 0; i < 6; ++i) { es[i] = e.s[i]; el[i] = e.l[i]; } }
     float tt = 0; nv.envPts[0][0] = 0; nv.envPts[0][1] = 0;
     for (int i = 0; i < 4; ++i) { tt += std::max (i ? 0.0f : .003f, es[i]); nv.envPts[i + 1][0] = tt; nv.envPts[i + 1][1] = nv.amp * std::max (0.0f, el[i]) / 100.0f; }
@@ -337,8 +355,9 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     // modulation envelopes and LFOs of the preset
     for (int w = 0; w < 3; ++w) if (nv.menvUsed[w] && (size_t) w < v.envs.size()) {
         auto& me = nv.menv[w]; const auto& e = v.envs[(size_t) w]; float t2 = 0; me.n = 0; me.pts[0][0] = 0; me.pts[0][1] = 0;
-        for (int i = 0; i < 4; ++i) { t2 += std::max (i ? 0.0f : .002f, rateSec (e.t[i])); me.pts[i + 1][0] = t2; me.pts[i + 1][1] = clamp1 (e.l[i] / 100.0f); }
-        me.n = 5; me.r1 = std::max (.008f, rateSec (e.t[4])); me.r2 = std::max (.008f, rateSec (e.t[5])); me.l4 = clamp1 (e.l[4] / 100.0f); me.l5 = clamp1 (e.l[5] / 100.0f);
+        const int rb = w == 1 ? 12 : w == 2 ? 16 : 8;
+        for (int i = 0; i < 4; ++i) { t2 += std::max (i ? 0.0f : .002f, rateSec (e.t[i] - rofs (rb, i))); me.pts[i + 1][0] = t2; me.pts[i + 1][1] = clamp1 (e.l[i] / 100.0f); }
+        me.n = 5; me.r1 = std::max (.008f, rateSec (e.t[4] - rofs (rb, 4))); me.r2 = std::max (.008f, rateSec (e.t[5] - rofs (rb, 5))); me.l4 = clamp1 (e.l[4] / 100.0f); me.l5 = clamp1 (e.l[5] / 100.0f);
     } else nv.menvUsed[w] = false;
     for (int w = 0; w < 2; ++w) if (nv.lfoUsed[w] && (size_t) w < v.plfos.size()) {
         const auto& L = v.plfos[(size_t) w]; nv.lfo[w].rate = L.rate; nv.lfo[w].shape = L.shape == 16 ? 1 : 0; nv.lfo[w].delay = L.delay > 0 ? rateSec (L.delay) : 0;
@@ -604,15 +623,20 @@ void Engine::renderChunk (float* L, float* R, int n) {
                 auto& lf = nv.lfo[w]; double ph = lf.ph - std::floor (lf.ph);
                 float val = lf.shape == 1 ? (float) (ph < .25 ? 4 * ph : ph < .75 ? 2 - 4 * ph : 4 * ph - 4) : (float) std::sin (2 * PI * ph);
                 if (lf.delay > 0) val *= (float) std::min (1.0, nv.envT / lf.delay);
-                lfoSig[w] = val; lf.ph += lf.rate * subDur;
+                lfoSig[w] = val; lf.ph += std::max (.01, std::min (50.0, lf.rate * std::pow (2.0, (double) nv.lfoOct[w]))) * subDur;
             }
             float pitch = nv.fixedPitch, filt = nv.fixedFilt, pan = nv.basePan + nv.cordPan, vol = 1;
+            float qMod = 0, lfoMod[2] { 0, 0 };
             for (auto& r : nv.routes) {
                 float sig = r.kind == K_ENV ? envSig[r.which] : r.kind == K_LFO ? lfoSig[r.which] : ctrlVal[r.ctrl];
                 float g = r.gain; for (auto& a : r.att) g += ctrlVal[a.first] * a.second;
                 float c = sig * g;
                 if (r.dst == DST_PITCH || r.dst == DST_FINE) pitch += c; else if (r.dst == DST_FILT) filt += c; else if (r.dst == DST_PAN) pan += c; else if (r.dst == DST_VOL) vol += c / 72.0f;
+                else if (r.dst == DST_Q || r.dst == DST_Q2) qMod += c; else if (r.dst == DST_LFO1) lfoMod[0] += c; else if (r.dst == DST_LFO2) lfoMod[1] += c;
             }
+            nv.lfoOct[0] = nv.lfoOctFixed[0] + lfoMod[0]; nv.lfoOct[1] = nv.lfoOctFixed[1] + lfoMod[1];
+            // resonance follows its cords (the Filter Q knob) while the key is held
+            if (nv.nStages && std::fabs (nv.qFixed + qMod - nv.filtQ) > .4f) { nv.filtQ = nv.qFixed + qMod; voiceFilter (nv, false); }
             // the panel's live settings: level, pan, tuning, sends, LFOs, filter follow the knobs while the key is held
             if (! nv.releasing && prog && nv.progVer != prog->version) {
                 nv.progVer = prog->version;
