@@ -5392,11 +5392,19 @@ ensureAudio = async s => {
   }).catch(() => { s._pcm = null; return null; });
   return s._pcm;
 };
+let bankLoaded = 0, bankBusy = null, bankRetryAt = 0;
 async function nativeBank(info) {
   if (!info) return;
+  if (bankBusy) return bankBusy;   // one read at a time
+  bankBusy = nativeBankRead(info).finally(() => { bankBusy = null; });
+  return bankBusy;
+}
+async function nativeBankRead(info) {
   progress(`Reading ${info.name}…`);
   try {
-    const [exb, smp] = await Promise.all([fetch('/x/exb').then(r => r.arrayBuffer()), fetch('/x/samples.json').then(r => r.json())]);
+    const get = async (u, how) => { for (let k = 0; ; k++) { try { const r = await fetch(u); if (!r.ok) throw new Error(u + ' ' + r.status); return await r[how](); } catch (e) { if (k >= 3) throw e; await new Promise(z => setTimeout(z, 300 * (k + 1))); } } };
+    const [exb, smp] = await Promise.all([get('/x/exb', 'arrayBuffer'), get('/x/samples.json', 'json')]);
+    if (!exb.byteLength || !Array.isArray(smp)) throw new Error('the plugin sent an empty bank');
     state.banks = []; state.chunks = []; state.presets = []; state.samples = []; state.poolByIndex = new Map(); state.zones = [];
     if (state.current?.type !== 'patch') state.current = null;
     await loadBank({ file: new File([exb], info.name), path: info.name });
@@ -5408,7 +5416,9 @@ async function nativeBank(info) {
     state.bankInfo = info;
     renderAll();
     $('#btn-forget').hidden = false;
-  } finally { progress(null); }
+    bankLoaded = info.ver || 1;
+  } catch (e) { console.warn(e); toast('Couldn’t read the bank from the plugin (' + (e.message || e) + '). Trying again…'); bankLoaded = -1; bankRetryAt = Date.now() + 2500; }
+  finally { progress(null); }
 }
 
 // ---------- what the plugin plays: the page's whole sound description ----------
@@ -5617,9 +5627,10 @@ async function onNative(m) {
   if (!m || !m.type) return;
   if (m.type === 'init') {
     if (started) return; started = true;
-    if (Array.isArray(m.apcc)) { AP_CC = m.apcc.slice(); sentApcc = JSON.stringify(AP_CC); }
-    if (Array.isArray(m.patches) && m.patches.length) { savedLib = m.patches.slice(); loadPatchJSON(JSON.stringify({ format: PATCH_FORMAT, patches: savedLib }), 'Patch'); renderList(); }
-    if (typeof m.params?.master === 'number') setMaster(m.params.master);
+    const step = (what, fn) => { try { return fn(); } catch (e) { console.warn(what, e); toast('Xtreme Lab: ' + what + ' failed (' + (e.message || e) + ')'); } };
+    step('MIDI numbers', () => { if (Array.isArray(m.apcc)) { AP_CC = m.apcc.slice(); sentApcc = JSON.stringify(AP_CC); } });
+    step('My patches', () => { if (Array.isArray(m.patches) && m.patches.length) { savedLib = m.patches.slice(); loadPatchJSON(JSON.stringify({ format: PATCH_FORMAT, patches: savedLib }), 'Patch'); renderList(); } });
+    step('master', () => { if (typeof m.params?.master === 'number') setMaster(m.params.master); });
     if (m.loading) progress(m.status || 'Loading…');
     if (m.bank) {
       await nativeBank(m.bank);
@@ -5633,7 +5644,7 @@ async function onNative(m) {
     }
     else if (m.status && /not found/i.test(m.status)) toast(m.status + '. Press Open bank to find it.');
     $('#btn-forget').hidden = !m.bank && !m.recent;
-    if (m.hostParams) onHostParams(m.hostParams);
+    step('host parameters', () => { if (m.hostParams) onHostParams(m.hostParams); });
     syncAll();
   } else if (m.type === 'bank') {
     const keep = uiSnapshot();
@@ -5645,6 +5656,14 @@ async function onNative(m) {
     if (m.bank?.missing) toast(`${m.bank.missing} zones have no sample in the SamplePool found next to the bank.`);
     syncAll();
   } else if (m.type === 'status') {
+    // the plugin has a bank this page hasn't shown (a message got lost, the window was reopened): read it now
+    if (m.bankVer && m.bankVer !== bankLoaded && !bankBusy && !m.loading && Date.now() > bankRetryAt) {
+      const had = !!state.presets.length;
+      nativeBank({ name: m.bankName, ver: m.bankVer }).then(async () => {
+        if (!had && bankLoaded > 0 && !state.current) { const i = state.presets.findIndex(p => p.def); if (i >= 0) { state.tab = 'pre'; renderList(); await selectPreset(i); } }
+        syncAll();
+      });
+    }
     showNotes(m.notes | 0);
     if (Array.isArray(m.peak)) { nPeak[0] = Math.max(nPeak[0], m.peak[0]); nPeak[1] = Math.max(nPeak[1], m.peak[1]); }
     if (Array.isArray(m.midi)) for (const v of m.midi) midiShow(v & 255, (v >> 8) & 255, (v >> 16) & 255, true);

@@ -116,6 +116,7 @@ void ExwEditor::timerCallback() {
     juce::Array<juce::var> midi; proc.midiForUi (midi);
     auto msg = obj ({ { "type", "status" }, { "notes", proc.notesPlaying() }, { "arp", proc.arpKeys() }, { "peak", juce::Array<juce::var> { proc.peak (0), proc.peak (1) } } });
     auto* o = msg.getDynamicObject();
+    if (auto b = proc.currentBank(); b && ! proc.isLoading()) { o->setProperty ("bankVer", proc.bankVersion()); o->setProperty ("bankName", juce::String::fromUTF8 (b->name.c_str())); }
     if (moved) o->setProperty ("knobs", knobs);
     if (midi.size()) o->setProperty ("midi", midi);
     if (proc.isLoading() || sentLoading || proc.bankStatus() != sentStatus) { o->setProperty ("loading", proc.isLoading()); o->setProperty ("progress", proc.loadProgress()); o->setProperty ("status", proc.bankStatus()); sentStatus = proc.bankStatus(); sentLoading = proc.isLoading(); }
