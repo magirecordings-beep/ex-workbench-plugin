@@ -10,7 +10,8 @@ namespace exw {
 // filter types of the Filter card ("lp2" ...; morph = index into MORPHS)
 enum { F_BYPASS, F_LP2, F_LP4, F_LP6, F_HP2, F_HP4, F_BP, F_NOTCH, F_EQ, F_PHASER, F_FLANGER, F_MORPH = 100 };
 
-struct FiltSpec { int type = F_BYPASS, morph = -1; float freq = 70, res = 20, env = 0, decay = .8f; };
+// env: filter envelope amount (-100..100 % of the range); fa attack s, decay s, fs sustain %, fr release s
+struct FiltSpec { int type = F_BYPASS, morph = -1; float freq = 70, res = 20, env = 0, decay = .8f, fa = 0, fs = 0, fr = .3f; };
 struct EnvSpec { float s[6] { .002f, 0, .6f, 0, .35f, 0 }, l[6] { 100, 100, 100, 100, 0, 0 }; };   // seconds, levels %
 struct LfoSpec { int shape = 0; float rate = 5, delay = 0; bool free = false; float pitch = 0, filter = 0, vol = 0, pan = 0;
                  bool used() const { return pitch || filter || vol || pan; } };
@@ -45,7 +46,7 @@ struct Program {
     bool patch = false;
     Slot slots[4]; int nSlots = 0;
     // the panel's own cards when no patch is playing
-    FiltSpec filt; bool usePreset = true; float ofsFreq = 0, ofsRes = 0, ofsEnv = 0, ofsDecay = .8f;
+    FiltSpec filt; bool usePreset = true; float ofsFreq = 0, ofsRes = 0, ofsEnv = 0, ofsDecay = .8f, ofsA = 0, ofsS = 0, ofsR = .3f;
     bool envFromPreset = true; EnvSpec env;
     LfoSpec lfo[3]; FgDef fg[3];
     // Setup card

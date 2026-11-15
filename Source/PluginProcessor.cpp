@@ -24,6 +24,7 @@ exw::FiltSpec filtFrom (const juce::var& f, bool* fromPreset = nullptr) {
     for (int i = 0; i < 11; ++i) if (t == T[i]) s.type = i;
     for (int i = 0; i < exw::NUM_MORPHS; ++i) if (t == exw::MORPHS[i].key) { s.type = exw::F_MORPH; s.morph = i; }
     s.freq = (float) num (f["freq"], 70); s.res = (float) num (f["res"], 20); s.env = (float) num (f["env"], 0); s.decay = (float) num (f["decay"], .8);
+    s.fa = (float) num (f["fa"], 0); s.fs = (float) num (f["fs"], 0); s.fr = (float) num (f["fr"], .3);
     return s;
 }
 exw::EnvSpec envFrom (const juce::var& e) {
@@ -56,6 +57,7 @@ struct PanelDef { const char* id; const char* name; float lo, hi, def, skew; con
 const PanelDef PANEL[] = {
     { "pFiltFreq", "Filter cutoff", 0, 100, 70, 0, "%" }, { "pFiltRes", "Filter resonance", 0, 100, 20, 0, "%" },
     { "pFiltEnv", "Filter env amount", -100, 100, 0, 0, "%" }, { "pFiltDecay", "Filter env decay", .01f, 8, .8f, 1, "s" },
+    { "pFiltAtk", "Filter env attack", 0, 30, 0, .5f, "s" }, { "pFiltSus", "Filter env sustain", 0, 100, 0, 0, "%" }, { "pFiltRel", "Filter env release", 0, 30, .3f, .8f, "s" },
     { "pEnvA", "Amp attack", 0, 30, .002f, .5f, "s" }, { "pEnvD", "Amp decay", 0, 30, .6f, .8f, "s" }, { "pEnvS", "Amp sustain", 0, 100, 100, 0, "" },
     { "pEnvR", "Amp release", 0, 30, .35f, .8f, "s" }, { "pVel", "Velocity", 0, 1, .7f, 0, "" }, { "pEnvTime", "Preset envelope time", .25f, 4, 1, 1, "x" },
     { "pLfoRate", "LFO rate", .05f, 20, 5, 1, "Hz" }, { "pLfoDelay", "LFO delay", 0, 5, 0, 0, "s" }, { "pLfoPitch", "LFO to pitch", -100, 100, 0, 0, "%" },
@@ -65,6 +67,8 @@ const PanelDef PANEL[] = {
     { "pLyVol", "Layer volume", -48, 6, 0, 0, "dB" }, { "pLyPan", "Layer pan", -100, 100, 0, 0, "" }, { "pLyCoarse", "Layer coarse", -36, 36, 0, 0, "st" }, { "pLyFine", "Layer fine", -100, 100, 0, 0, "ct" },
     { "pMfFreq", "Master filter cutoff", 0, 100, 70, 0, "%" }, { "pMfRes", "Master filter resonance", 0, 100, 20, 0, "%" },
     { "pMfRate", "Master filter LFO rate", .05f, 20, .2f, 1, "Hz" }, { "pMfDepth", "Master filter LFO depth", 0, 100, 0, 0, "%" },
+    { "pMfEnv", "Master filter env amount", -100, 100, 0, 0, "%" }, { "pMfAtk", "Master filter env attack", 0, 30, 0, .5f, "s" }, { "pMfDec", "Master filter env decay", .01f, 8, .8f, 1, "s" },
+    { "pMfSus", "Master filter env sustain", 0, 100, 0, 0, "%" }, { "pMfRel", "Master filter env release", 0, 30, .3f, .8f, "s" },
     { "pTune", "Fine tune", -100, 100, 0, 0, "ct" }, { "pBend", "Bend range", 0, 24, 2, 0, "st" },
 };
 }
@@ -240,7 +244,7 @@ std::shared_ptr<exw::Program> ExwProcessor::buildProgram (const juce::var& s) {
     p->tune = (float) num (P["tune"], 0); p->bend = (float) num (P["bend"], 2); p->bendp = flag (P["bendp"], true); p->velsens = (float) num (P["velsens"], .7);
     p->loop = flag (P["loop"], true); p->envscale = (float) num (P["envscale"], 1); p->pmod = flag (P["pmod"], true);
     auto F = s["filt"]; p->filt = filtFrom (F); p->usePreset = flag (F["usePreset"], true);
-    auto O = s["pOfs"]; p->ofsFreq = (float) num (O["freq"], 0); p->ofsRes = (float) num (O["res"], 0); p->ofsEnv = (float) num (O["env"], 0); p->ofsDecay = (float) num (O["decay"], .8);
+    auto O = s["pOfs"]; p->ofsFreq = (float) num (O["freq"], 0); p->ofsRes = (float) num (O["res"], 0); p->ofsEnv = (float) num (O["env"], 0); p->ofsDecay = (float) num (O["decay"], .8); p->ofsA = (float) num (O["fa"], 0); p->ofsS = (float) num (O["fs"], 0); p->ofsR = (float) num (O["fr"], .3);
     p->envFromPreset = s["envSource"].toString() == "preset"; p->env = envFrom (s["env"]);
     for (int k = 0; k < 3; ++k) { p->lfo[k] = lfoFrom (at (s["lfos"], k), k); p->fg[k] = fgFrom (at (s["fgs"], k)); }
     p->sendA = (float) num (s["sendA"], 20); p->sendB = (float) num (s["sendB"], 0);
@@ -461,7 +465,7 @@ void ExwProcessor::applyPanel (const juce::String& id, float v) {
     if (patch && ! L.isObject()) return;
     auto P = child (s, "P");
     if (id.startsWith ("pFilt")) {
-        const char* k = id == "pFiltFreq" ? "freq" : id == "pFiltRes" ? "res" : id == "pFiltEnv" ? "env" : "decay";
+        const char* k = id == "pFiltFreq" ? "freq" : id == "pFiltRes" ? "res" : id == "pFiltEnv" ? "env" : id == "pFiltAtk" ? "fa" : id == "pFiltSus" ? "fs" : id == "pFiltRel" ? "fr" : "decay";
         if (patch) {
             auto f = L["filter"];
             if (! f.isObject() || f["type"].toString() == "preset") { f = presetFilt (L["src"]); dobj (L)->setProperty ("filter", f); }
@@ -505,7 +509,8 @@ void ExwProcessor::applyPanel (const juce::String& id, float v) {
     } else if (id.startsWith ("pMf")) {
         if (! patch) return;
         auto mf = child (s, "mf");
-        setp (mf, id == "pMfFreq" ? "freq" : id == "pMfRes" ? "res" : id == "pMfRate" ? "rate" : "depth", v);
+        setp (mf, id == "pMfFreq" ? "freq" : id == "pMfRes" ? "res" : id == "pMfRate" ? "rate" : id == "pMfDepth" ? "depth" : id == "pMfEnv" ? "env"
+                  : id == "pMfAtk" ? "fa" : id == "pMfDec" ? "decay" : id == "pMfSus" ? "fs" : "fr", v);
     }
 }
 

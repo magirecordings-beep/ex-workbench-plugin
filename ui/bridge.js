@@ -113,7 +113,7 @@ function engineSnapshot() {
   const pt = curPatch();
   const s = {
     sel,
-    filt: { type: fState.type, freq: fState.freq, res: fState.res, env: fState.env, decay: fState.decay, usePreset: !!fState.usePreset },
+    filt: { type: fState.type, freq: fState.freq, res: fState.res, env: fState.env, decay: fState.decay, fa: fState.fa || 0, fs: fState.fs || 0, fr: fState.fr ?? .3, usePreset: !!fState.usePreset },
     pOfs: fState.pOfs || P_OFS(), envSource: envState.source, env: envState.env, lfos: lfoState, fgs: fgState,
     P: { tune: P.tune.v, bend: P.bend.v, bendp: P.bendp.v, velsens: P.velsens.v, loop: P.loop.v, envscale: P.envscale.v, pmod: P.pmod.v },
     sendA: fxState.send.a, sendB: fxState.send.b,
@@ -351,11 +351,13 @@ async function onNative(m) {
 const id1 = v => v;
 const PNL = {
   pFiltFreq: ['filt-freq', id1, id1], pFiltRes: ['filt-res', id1, id1], pFiltEnv: ['filt-env', id1, id1], pFiltDecay: ['filt-decay', id1, id1],
+  pFiltAtk: ['filt-fa', envU, envS], pFiltSus: ['filt-fs', id1, id1], pFiltRel: ['filt-fr', envU, envS],
   pEnvA: ['env-a', envU, envS], pEnvD: ['env-d', envU, envS], pEnvS: ['env-s', id1, id1], pEnvR: ['env-r', envU, envS], pVel: ['env-vel', id1, id1], pEnvTime: ['env-time', id1, id1],
   pLfoRate: ['lfo-rate', uFromRate, rateFromU], pLfoDelay: ['lfo-delay', id1, id1], pLfoPitch: ['lfo-pitch', id1, id1], pLfoFilter: ['lfo-filter', id1, id1], pLfoVol: ['lfo-vol', id1, id1], pLfoPan: ['lfo-pan', id1, id1],
   pFgRate: ['fg-rate', FGR.from, FGR.to], pFgSteps: ['fg-end', id1, id1], pFgPitch: ['fg-pitch', id1, id1], pFgFilter: ['fg-filter', id1, id1], pFgVol: ['fg-vol', id1, id1], pFgPan: ['fg-pan', id1, id1],
   pLyVol: ['ly-vol', id1, id1], pLyPan: ['ly-pan', id1, id1], pLyCoarse: ['ly-coarse', id1, id1], pLyFine: ['ly-fine', id1, id1],
   pMfFreq: ['mf-freq', id1, id1], pMfRes: ['mf-res', id1, id1], pMfRate: ['mf-rate', uFromRate, rateFromU], pMfDepth: ['mf-depth', id1, id1],
+  pMfEnv: ['mf-env', id1, id1], pMfAtk: ['mf-fa', envU, envS], pMfDec: ['mf-decay', id1, id1], pMfSus: ['mf-fs', id1, id1], pMfRel: ['mf-fr', envU, envS],
   pTune: ['p-tune', id1, id1], pBend: ['p-bend', id1, id1]
 };
 const PNL_BY_INPUT = Object.fromEntries(Object.entries(PNL).map(([k, [inp]]) => [inp, k]));
@@ -420,5 +422,7 @@ function bridgeStart() {
   XB.addEventListener('exw', onNative);
   setInterval(() => { syncEngine(); syncKnobs(); syncParams(); }, 30);
   setInterval(syncUi, 700);
+  // ask until the plugin answers: a window that isn't on screen yet (or was hidden) drops messages
   toNative({ type: 'ready' });
+  const ask = setInterval(() => { if (started) clearInterval(ask); else toNative({ type: 'ready' }); }, 400);
 }

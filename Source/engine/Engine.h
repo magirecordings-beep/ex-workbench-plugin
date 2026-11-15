@@ -91,8 +91,10 @@ private:
         // filter
         int nStages = 0; StageSpec stages[6] {}; Biquad bq[6]; bool filtMod = false; float lastFiltCents = 1e9f;
         // the stage settings glide (filter envelope decay, live knob moves), in the browser worklet's way
-        StageSpec stFrom[6] {}, stTo[6] {}; bool gliding = false, glideExp = false; double stK = 1, stKStep = 0, stTc = .01; int stDelay = 0;
-        int filtRule = 0; float filtQ = 0; int progVer = -1; float presetCents = 0;   // 0 own preset filter, 1 preset + shift, 2 panel filter, 3 layer filter
+        // filter envelope: the stages move between a base and a peak shape (filter + env amount) with an ADSR value fe;
+        // knob moves glide base and peak to their new shapes (as the browser version's voice filter worklet)
+        StageSpec eb[6] {}, ep[6] {}, ebT[6] {}, epT[6] {}; bool fMoving = false; float fe = 0, feA = 0, feD = .8f, feS = 0, feR = .3f; int feStage = 3, feHold = 0; int stDelay = 0;
+        int filtRule = 0; float filtQ = 0; int progVer = -1; float presetCents = 0, presetNow = 0;   // 0 own preset filter, 1 preset + shift, 2 panel filter, 3 layer filter
         // unison copies (1 = plain)
         std::vector<Copy> copies; bool stereoPath = false;
         float panNow = 0;
@@ -122,6 +124,7 @@ private:
     FgRun fgFree[5][3]; double lfoFreePh[5][3] {}; float lfoFreeHold[5][3][2] {}; double vibPh = 0;
     // patch master filter
     StageSpec mfSt[6] {}; int mfN = 0; Biquad mfBq[6]; double mfPh = 0; int mfVer = -1; float mfLast = 1e9f;
+    float mfE = 0; int mfEStage = 3, mfHeld = 0;   // its envelope: from the first key down to the last key up
     std::mt19937 lfoRng { 99 };
     void fgAdvance (const FgDef& f, FgRun& r, double dt);
     double fgStepSec (const FgDef& f) const;
@@ -138,6 +141,8 @@ private:
     bool baseSpec (const NoteVoice& nv, FiltSpec& out) const;   // false: no filter
     void filterStages (const FiltSpec& sp, float mod, StageSpec out[6], int& n) const;
     void voiceFilter (NoteVoice& nv, bool start);
+    bool filterStep (NoteVoice& nv, int m);   // envelope + glide for one little block; true when the stages moved
+    static void advanceEnv (float& e, int& stage, int& hold, float a, float d, float s, float r, double dt);
     MasterFx master;
 
     float rateSec (float x) const;

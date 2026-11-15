@@ -53,6 +53,7 @@ int main (int argc, char** argv) {
         run ("layer as preset", [] (Slot&) {});
         run ("layer filter lp4 closed", [] (Slot& s) { s.filtFromPreset = false; s.filt.type = F_LP4; s.filt.freq = 20; s.filt.res = 10; });
         run ("layer filter lp4 + env sweep", [] (Slot& s) { s.filtFromPreset = false; s.filt.type = F_LP4; s.filt.freq = 20; s.filt.res = 40; s.filt.env = 60; s.filt.decay = 1.5f; });
+        run ("layer filter ADSR a.3 s50", [] (Slot& s) { s.filtFromPreset = false; s.filt.type = F_LP4; s.filt.freq = 20; s.filt.res = 30; s.filt.env = 60; s.filt.fa = .3f; s.filt.decay = .4f; s.filt.fs = 50; s.filt.fr = 1; });
         run ("layer morph Ah>Ee", [] (Slot& s) { s.filtFromPreset = false; s.filt.type = F_MORPH; s.filt.morph = 0; s.filt.freq = 50; });
         run ("layer env: 0.8 s attack", [] (Slot& s) { s.useSrcEnv = false; s.env.s[0] = .8f; });
         run ("layer LFO1 square 4 Hz vol", [] (Slot& s) { s.lfo[0].shape = 2; s.lfo[0].rate = 4; s.lfo[0].vol = 100; });

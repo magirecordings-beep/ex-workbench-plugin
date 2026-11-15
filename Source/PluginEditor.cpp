@@ -107,6 +107,9 @@ void ExwEditor::sendInit() {
 
 void ExwEditor::timerCallback() {
     if (! ready) return;
+    // messages to a page that isn't on screen are dropped: wait until it is (minimised, hidden, not yet shown)
+    if (! web.isShowing()) return;
+    if (initPending) { initPending = false; sendInit(); return; }
     if (proc.bankVersion() != sentBankVer && ! proc.isLoading()) { sentBankVer = proc.bankVersion(); send (obj ({ { "type", "bank" }, { "bank", bankInfo() }, { "status", proc.bankStatus() } })); }
     juce::Array<juce::var> knobs; bool moved = false;
     for (int i = 0; i < 16; ++i) { float k = proc.knob (i); knobs.add (k); if (std::abs (k - sentKnobs[i]) > 1e-4f) { moved = true; sentKnobs[i] = k; } }
@@ -132,7 +135,7 @@ void ExwEditor::timerCallback() {
 
 void ExwEditor::handle (const juce::var& m) {
     auto type = m["type"].toString();
-    if (type == "ready") { ready = true; proc.uiActive = true; sendInit(); }
+    if (type == "ready") { ready = true; proc.uiActive = true; initPending = true; if (web.isShowing()) { sendInit(); initPending = false; } }
     else if (type == "learn") proc.startLearn ((int) m["index"]);
     else if (type == "engine") proc.setEngineState (m["state"], (bool) m["reset"], m["ic"]);
     else if (type == "ui") proc.setUiState (m["state"]);

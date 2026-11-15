@@ -309,6 +309,16 @@ input[type=search],input[type=text]{background:#121316;color:var(--ink);border:1
 .kgrid > :not(.kcell):not(.fxr):not(.krow){grid-column:1/-1}
 .kgrid .fxr{display:contents}
 #fxb-x.kgrid{grid-column:1/-1!important}
+/* the Filter card's seven knobs (frequency, resonance, envelope amount + ADSR) in one row */
+body.xl section[aria-labelledby="filt-title"] .env-rows.kgrid{grid-template-columns:repeat(7,minmax(0,1fr))!important}
+/* layer on/off on every page */
+.lonbar{display:flex;align-items:center;gap:4px;margin-left:auto}
+.lonbar .lt{font:600 10px var(--f-mono);letter-spacing:.08em;color:var(--muted);margin-right:2px}
+.lonbar button{min-width:34px;padding:5px 6px;font:600 11px var(--f-mono);border-radius:5px}
+.lonbar button:not(.on):not(.empty){color:var(--muted);text-decoration:line-through}
+body.xl section[aria-labelledby="filt-title"] .kcell > label{font-size:10.5px!important;text-overflow:clip!important}
+.lonbar button.on{background:linear-gradient(180deg,#d6392f,#a8261e);color:#fff;border-color:#e0574e}
+.lonbar button.empty{opacity:.35}
 .kmenu{position:fixed;z-index:9999;min-width:200px;background:#15171b;border:1px solid #3a3f47;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px;font-size:13px}
 .kmenu-h{padding:5px 9px 6px;color:#8b93a0;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid #2a2e35;margin-bottom:3px}
 .kmenu button{display:block;width:100%;text-align:left;background:none;border:0;color:#e6e9ee;padding:6px 9px;border-radius:4px;cursor:pointer;font:inherit}
@@ -737,6 +747,7 @@ body.xl .needpool .toolbar button{padding:4px 10px;font-size:12px}
   <section class="panel" aria-labelledby="h-voice">
     <div class="hd"><span class="label" id="h-voice">Voice</span>
       <div class="toolbar">
+        <div class="lonbar" id="lonbar" role="group" aria-label="Layers on/off" hidden><span class="lt">ON</span><button type="button" data-lon="0">1</button><button type="button" data-lon="1">2</button><button type="button" data-lon="2">3</button><button type="button" data-lon="3">4</button></div>
         <button type="button" id="btn-newpatch" title="Start a patch with what is selected as layer 1">＋ New patch from this</button>
         <label class="toggle"><input type="checkbox" id="opt-c3"> Names use C3 = MIDI 60</label>
       </div>
@@ -814,6 +825,11 @@ body.xl .needpool .toolbar button{padding:4px 10px;font-size:12px}
             <label for="mf-res">Resonance</label><input type="range" id="mf-res" min="0" max="100" step="1"><output id="mf-res-v"></output>
             <label for="mf-rate">LFO rate</label><input type="range" id="mf-rate" min="0" max="1" step="0.001"><output id="mf-rate-v"></output>
             <label for="mf-depth">LFO depth</label><input type="range" id="mf-depth" min="0" max="100" step="1"><output id="mf-depth-v"></output>
+            <label for="mf-env">Env amount</label><input type="range" id="mf-env" min="-100" max="100" step="1"><output id="mf-env-v"></output>
+            <label for="mf-fa">Attack</label><input type="range" id="mf-fa" min="0" max="1" step="0.001"><output id="mf-fa-v"></output>
+            <label for="mf-decay">Decay</label><input type="range" id="mf-decay" min="0.01" max="8" step="0.01"><output id="mf-decay-v"></output>
+            <label for="mf-fs">Sustain</label><input type="range" id="mf-fs" min="0" max="100" step="1"><output id="mf-fs-v"></output>
+            <label for="mf-fr">Release</label><input type="range" id="mf-fr" min="0" max="1" step="0.001"><output id="mf-fr-v"></output>
           </div>
         </div>
       </section>
@@ -832,10 +848,13 @@ body.xl .needpool .toolbar button{padding:4px 10px;font-size:12px}
           <span class="muted filt-hint" id="filt-hint"></span>
         </div>
         <div class="env-rows">
-          <label for="filt-freq" id="filt-freq-l">Frequency</label><input type="range" id="filt-freq" min="0" max="100" step="0.1"><output id="filt-freq-v"></output>
-          <label for="filt-res">Resonance</label><input type="range" id="filt-res" min="0" max="100" step="1"><output id="filt-res-v"></output>
-          <label for="filt-env">Env amount</label><input type="range" id="filt-env" min="-100" max="100" step="1"><output id="filt-env-v"></output>
-          <label for="filt-decay">Env decay</label><input type="range" id="filt-decay" min="0.01" max="8" step="0.01"><output id="filt-decay-v"></output>
+          <label for="filt-freq" id="filt-freq-l">Cutoff</label><input type="range" id="filt-freq" min="0" max="100" step="0.1"><output id="filt-freq-v"></output>
+          <label for="filt-res">Reso</label><input type="range" id="filt-res" min="0" max="100" step="1"><output id="filt-res-v"></output>
+          <label for="filt-env">Env amt</label><input type="range" id="filt-env" min="-100" max="100" step="1"><output id="filt-env-v"></output>
+          <label for="filt-fa">Attack</label><input type="range" id="filt-fa" min="0" max="1" step="0.001"><output id="filt-fa-v"></output>
+          <label for="filt-decay">Decay</label><input type="range" id="filt-decay" min="0.01" max="8" step="0.01"><output id="filt-decay-v"></output>
+          <label for="filt-fs">Sustain</label><input type="range" id="filt-fs" min="0" max="100" step="1"><output id="filt-fs-v"></output>
+          <label for="filt-fr">Release</label><input type="range" id="filt-fr" min="0" max="1" step="0.001"><output id="filt-fr-v"></output>
         </div>
       </section>
       <section style="grid-area:env" data-pg="voice" class="envcard" aria-labelledby="env-title">
@@ -1969,6 +1988,16 @@ function exwWorklet() {
         const conv = a => a.map(x => ({ t: STT[x.t] ?? 4, f: x.f, g: x.g ?? 0, q: x.q ?? (x.t === 'lowpass' || x.t === 'highpass' ? -3 : 1) }));
         if (d.stages && !this.st.length) { this.st = conv(d.stages); this.dirty = true; }
         else if (d.stages) { this.from = this.st.map(x => ({ ...x })); this.to = conv(d.stages); this.k = 0; this.kStep = d.ramp ? 16 / (d.ramp * sampleRate) : 1; this.mode = 'lin'; }
+        // filter envelope: the stages move between a base and a peak shape with an attack/decay/sustain/release value;
+        // new shapes (a knob move) are glided to over about 15 ms
+        if (d.fenv) {
+          const f = d.fenv, B = conv(f.base), P = conv(f.peak);
+          if (!this.eb) { this.eb = B.map(x => ({ ...x })); this.ep = P.map(x => ({ ...x })); this.e = f.a > 0 ? 0 : 1; this.eStage = 0; this.eHold = f.a > 0 ? 0 : Math.round(.004 * sampleRate); if (!this.st.length) this.st = (f.a > 0 ? B : P).map(x => ({ ...x })); }
+          else this.eMove = true;
+          this.ebT = B; this.epT = P; this.ea = Math.max(0, f.a || 0); this.ed = Math.max(.01, f.d ?? .8); this.es = Math.min(1, Math.max(0, f.s || 0)); this.er = Math.max(.005, f.r ?? .3);
+          this.dirty = true;
+        }
+        if (d.release && this.eb) this.eStage = 2;
         if (d.then) { this.from = this.st.map(x => ({ ...x })); this.to = conv(d.then.stages); this.k = 0; this.delay = Math.max(0, Math.round(((d.then.atTime != null ? d.then.atTime - currentTime : d.then.at) || 0) * sampleRate)); this.tc = d.then.tc || .01; this.mode = 'exp'; }
     }
     coeffs(cents) {
@@ -1998,8 +2027,23 @@ function exwWorklet() {
       const out = outs[0], inp = ins[0]; if (!out || !out.length) return true;
       const n = out[0].length, det = params.detune, nst = this.st.length;
       for (let b = 0; b < n; b += 16) {
+        if (this.eb && nst) {
+          let moved = false;
+          if (this.eMove) {
+            const k = 1 - Math.exp(-16 / (.015 * sampleRate)); let done = true;
+            const mv = (c, t) => { c.t = t.t; const lf = Math.log(c.f), lt = Math.log(t.f); if (Math.abs(lt - lf) > 1e-4 || Math.abs(t.g - c.g) > 1e-4 || Math.abs(t.q - c.q) > 1e-4) { done = false; c.f = Math.exp(lf + (lt - lf) * k); c.g += (t.g - c.g) * k; c.q += (t.q - c.q) * k; } else { c.f = t.f; c.g = t.g; c.q = t.q; } };
+            for (let i = 0; i < nst; i++) { mv(this.eb[i], this.ebT[i]); mv(this.ep[i], this.epT[i]); }
+            if (done) this.eMove = false; moved = true;
+          }
+          const e0 = this.e, dt = 16 / sampleRate;
+          if (this.eStage === 0) { if (this.ea > 0) { this.e += dt / this.ea; if (this.e >= 1) { this.e = 1; this.eStage = 1; } } else { this.e = 1; this.eHold -= 16; if (this.eHold <= 0) this.eStage = 1; } }
+          else if (this.eStage === 1) this.e = this.es + (this.e - this.es) * Math.exp(-dt / Math.max(.0033, this.ed / 3));
+          else this.e *= Math.exp(-dt / Math.max(.0017, this.er / 3));
+          if (Math.abs(this.e - e0) > 1e-5) moved = true;
+          if (moved) { for (let i = 0; i < nst; i++) { const a = this.eb[i], p = this.ep[i], s = this.st[i]; s.t = a.t; s.f = Math.exp(Math.log(a.f) + (Math.log(p.f) - Math.log(a.f)) * this.e); s.g = a.g + (p.g - a.g) * this.e; s.q = a.q + (p.q - a.q) * this.e; } this.dirty = true; }
+        }
         // glide between stage settings (live knob moves, filter envelope decay)
-        if (this.to && nst) {
+        else if (this.to && nst) {
           if (this.delay > 0) this.delay -= 16;
           else {
             this.k = this.mode === 'exp' ? 1 - (1 - this.k) * Math.exp(-16 / (this.tc * sampleRate)) : Math.min(1, this.k + this.kStep);
@@ -2388,13 +2432,15 @@ function buildDelay(c, T, lfo) {
 }
 
 /* ---------- Master filter: one filter over the whole patch ---------- */
-const newMaster = () => ({ type: 'bypass', freq: 70, res: 20, rate: .2, depth: 0 });
+const newMaster = () => ({ type: 'bypass', freq: 70, res: 20, rate: .2, depth: 0, env: 0, fa: 0, decay: .8, fs: 0, fr: .3 });
 let mfNodes = null;
 function mfInit() {
   const fs = Array.from({ length: F_STAGES }, () => ctx.createBiquadFilter());
   for (let i = 1; i < F_STAGES; i++) fs[i - 1].connect(fs[i]);
   const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = .2; lg.gain.value = 0; lfo.connect(lg); fs.forEach(f => lg.connect(f.detune)); lfo.start();
-  mfNodes = { fs, lfo, lg };
+  // the master filter's envelope (cents on every stage): from the first key down to the last key up
+  const eg = ctx.createConstantSource(); eg.offset.value = 0; fs.forEach(f => eg.connect(f.detune)); eg.start();
+  mfNodes = { fs, lfo, lg, eg };
 }
 const masterSpec = () => state.current?.type === 'patch' ? (curPatch().mfilter ||= newMaster()) : null;
 function applyMaster() {
@@ -2404,6 +2450,18 @@ function applyMaster() {
   applyStages(mfNodes.fs, filterStages(sp), t, .03);
   mfNodes.lfo.frequency.setTargetAtTime(m?.rate || .2, t, .03);
   mfNodes.lg.gain.setTargetAtTime(m && m.type !== 'bypass' ? Math.pow((m.depth || 0) / 100, 2) * 3600 : 0, t, .05); // up to ±3 octaves
+}
+const mfHeld = new Set();
+function mfKey(note, down) {
+  if (!mfNodes || !ctx) { if (down) mfHeld.add(note); else mfHeld.delete(note); return; }
+  const was = mfHeld.size; if (down) mfHeld.add(note); else mfHeld.delete(note);
+  const m = masterSpec(), o = mfNodes.eg.offset, t = ctx.currentTime;
+  if (!m || m.type === 'bypass' || !m.env) { o.cancelScheduledValues(t); o.setTargetAtTime(0, t, .02); return; }
+  const peak = m.env / 100 * 1200 * Math.log2(500);
+  if (down && was === 0) {
+    const a = Math.max(.003, m.fa || 0); o.cancelScheduledValues(t); o.setValueAtTime(o.value, t);
+    o.linearRampToValueAtTime(peak, t + a); o.setTargetAtTime(peak * (m.fs || 0) / 100, t + a, Math.max(.01, (m.decay ?? .8) / 3));
+  } else if (!down && mfHeld.size === 0) { o.cancelScheduledValues(t); o.setValueAtTime(o.value, t); o.setTargetAtTime(0, t, Math.max(.005, (m.fr ?? .3) / 3)); }
 }
 function mfRender() {
   const m = masterSpec(); if (!m) return;
@@ -2415,13 +2473,19 @@ function mfRender() {
   set('mf-res', m.res, Math.round(m.res) + '%');
   set('mf-rate', uFromRate(m.rate), m.rate < 1 ? m.rate.toFixed(2) + ' Hz' : m.rate.toFixed(1) + ' Hz');
   set('mf-depth', m.depth, m.depth ? Math.round(m.depth) + '%' : 'off');
+  set('mf-env', m.env || 0, ((m.env || 0) > 0 ? '+' : '') + Math.round(m.env || 0) + '%');
+  set('mf-fa', envU(m.fa || 0), fmtS(m.fa || 0));
+  set('mf-decay', m.decay ?? .8, fmtS(m.decay ?? .8));
+  set('mf-fs', m.fs || 0, Math.round(m.fs || 0) + '%');
+  set('mf-fr', envU(m.fr ?? .3), fmtS(m.fr ?? .3));
   drawFiltTo($('#mf-graph'), off ? { type: 'bypass', freq: 70, res: 0 } : m);
 }
 function bindMaster() {
   $('#mf-morphs').innerHTML = Object.entries(MORPHS).map(([k, m]) => `<option value="${k}">${m.name}</option>`).join('');
   const edit = fn => { const m = masterSpec(); if (!m) return; fn(m); markDirty(); applyMaster(); mfRender(); };
   $('#mf-type').addEventListener('change', e => edit(m => { m.type = e.target.value; if (isMorph(m.type) && m.freq > 95) m.freq = 50; }));
-  for (const k of ['freq', 'res', 'depth']) $('#mf-' + k).addEventListener('input', e => { fillRange(e.target); edit(m => { m[k] = parseFloat(e.target.value); }); });
+  for (const k of ['freq', 'res', 'depth', 'env', 'decay', 'fs']) $('#mf-' + k).addEventListener('input', e => { fillRange(e.target); edit(m => { m[k] = parseFloat(e.target.value); }); });
+  for (const k of ['fa', 'fr']) $('#mf-' + k).addEventListener('input', e => { fillRange(e.target); edit(m => { m[k] = Math.round(envS(parseFloat(e.target.value)) * 1000) / 1000; }); });
   $('#mf-rate').addEventListener('input', e => { fillRange(e.target); edit(m => { m.rate = Math.round(rateFromU(parseFloat(e.target.value)) * 100) / 100 || .05; }); });
   new ResizeObserver(() => mfRender()).observe($('#mf-graph'));
 }
@@ -2603,22 +2667,25 @@ function filtRender() {
   if (tg.type === 'preset' && !canPreset) tg.type = 'bypass';
   const sel = $('#filt-type'); sel.value = pm ? 'preset' : tg.type;
   const morph = isMorph(sp.type);
-  $('#filt-freq-l').textContent = morph ? 'Morph' : 'Frequency';
+  $('#filt-freq-l').textContent = morph ? 'Morph' : 'Cutoff';
   $('#filt-hint').textContent = morph ? 'Morph glides the whole shape from frame A to frame B' : sp.type === 'bypass' ? 'Sound passes unfiltered' : '';
   const set = (id, v, txt) => { const r = $('#' + id); if (document.activeElement !== r) r.value = v; fillRange(r); $('#' + id + '-v').textContent = txt; };
   if (presetFiltMode() && sp.type !== 'bypass') {
     const o = fState.pOfs, oct = o.freq * Math.log2(500) / 100, sg = x => (x > 0 ? '+' : x < 0 ? '−' : '±');
     set('filt-freq', 50 + o.freq / 2, morph ? sg(o.freq) + Math.abs(Math.round(o.freq)) + '%' : sg(oct) + Math.abs(oct).toFixed(1) + ' oct');
     set('filt-res', 50 + o.res / 2, sg(o.res) + Math.abs(Math.round(o.res)) + '%');
-    $('#filt-freq-l').textContent = morph ? 'Morph shift' : 'Cutoff shift';
+    $('#filt-freq-l').textContent = morph ? 'Morph ±' : 'Cutoff ±';
   } else {
   set('filt-freq', sp.freq, morph ? Math.round(sp.freq) + '%' : fmtHz(40 * Math.pow(500, sp.freq / 100)));
   set('filt-res', sp.res, Math.round(sp.res) + '%');
   }
   set('filt-env', sp.env || 0, ((sp.env || 0) > 0 ? '+' : '') + Math.round(sp.env || 0) + '%');
   set('filt-decay', sp.decay ?? .8, fmtS(sp.decay ?? .8));
+  set('filt-fa', envU(sp.fa || 0), fmtS(sp.fa || 0));
+  set('filt-fs', sp.fs || 0, Math.round(sp.fs || 0) + '%');
+  set('filt-fr', envU(sp.fr ?? .3), fmtS(sp.fr ?? .3));
   const ro = tg.type === 'preset'; // a patch layer set to "From preset" plays it as saved; the global card edits it
-  ['filt-freq', 'filt-res', 'filt-env', 'filt-decay'].forEach(id => $('#' + id).disabled = ro || sp.type === 'bypass');
+  ['filt-freq', 'filt-res', 'filt-env', 'filt-fa', 'filt-decay', 'filt-fs', 'filt-fr'].forEach(id => $('#' + id).disabled = ro || sp.type === 'bypass');
   drawFilt(sp);
 }
 const fmtHz = f => f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 1 : 2) + ' kHz' : Math.round(f) + ' Hz';
@@ -2673,7 +2740,13 @@ function bindFilt() {
     }
     filtEdit(f => { f[k] = v; });
   });
-  onR('filt-freq', 'freq'); onR('filt-res', 'res'); onR('filt-env', 'env'); onR('filt-decay', 'decay');
+  onR('filt-freq', 'freq'); onR('filt-res', 'res'); onR('filt-env', 'env'); onR('filt-decay', 'decay'); onR('filt-fs', 'fs');
+  // attack and release knobs run 0..30 s like the amp envelope's
+  for (const [id, k] of [['filt-fa', 'fa'], ['filt-fr', 'fr']]) $('#' + id).addEventListener('input', e => {
+    fillRange(e.target); const v = Math.round(envS(parseFloat(e.target.value)) * 1000) / 1000;
+    if (presetFiltMode()) { fState.pOfs[k] = v; updateLive(); filtRender(); return; }
+    filtEdit(f => { f[k] = v; });
+  });
   $('#filt-preset').addEventListener('change', e => { fState.usePreset = e.target.checked; updateLive(); filtRender(); });
   $('#filt-copy').addEventListener('click', () => { filtClip = { ...filtShownSpec() }; $('#filt-paste').disabled = false; toast('Filter copied.'); });
   $('#filt-paste').addEventListener('click', () => { if (filtClip) filtEdit(f => Object.assign(f, filtClip, { usePreset: f.usePreset })); toast('Filter pasted.'); });
@@ -2755,8 +2828,24 @@ const LY_ROWS = {
   vhi: [ly => ly.vel.hi, (ly, v) => { ly.vel.hi = v; if (ly.vel.lo > v) ly.vel.lo = v; }, v => String(v)]
 };
 // the 1-4 buttons on the Filter, LFO, Amp envelope and Effects cards
+function renderLonbar() {
+  const pt = curPatch(), bar = $('#lonbar'); if (!bar) return;
+  bar.hidden = !pt; if (!pt) return;
+  bar.querySelectorAll('[data-lon]').forEach(b => {
+    const i = +b.dataset.lon, ly = pt.layers[i];
+    b.classList.toggle('on', !!ly.src && ly.on); b.classList.toggle('empty', !ly.src); b.disabled = !ly.src;
+    b.setAttribute('aria-pressed', String(!!ly.src && ly.on));
+    b.textContent = 'L' + (i + 1);
+    b.title = ly.src ? `Layer ${i + 1}: ${ly.src.name} — click to turn it ${ly.on ? 'off' : 'on'}` : `Layer ${i + 1} is empty`;
+  });
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest?.('[data-lon]'); if (!b) return;
+  const pt = curPatch(); if (!pt) return; const ly = pt.layers[+b.dataset.lon]; if (!ly?.src) return;
+  ly.on = !ly.on; markDirty(); updateLive(); renderPatch(); renderLCD(); renderKeys(); renderLonbar();
+});
 function renderLayerSel() {
-  const pt = curPatch();
+  const pt = curPatch(); renderLonbar();
   document.querySelectorAll('.lsel').forEach(g => {
     g.hidden = !pt; if (!pt) return;
     g.querySelectorAll('[data-lsel]').forEach(b => {
@@ -2773,6 +2862,7 @@ function selectLayer(i) {
   drawWave(layerSamples(curLayer())[0]);
 }
 function renderPatch() {
+  renderLonbar();
   renderLayerSel();
   const pt = curPatch(); if (!pt) return;
   const nm = $('#patch-name'); if (document.activeElement !== nm) nm.value = pt.name;
@@ -3452,6 +3542,7 @@ async function noteOn(note, vel = 100, from, at) {
     if (perf.arp !== 'off') { sus.pending.delete(note); keyEl(note)?.classList.add('on'); arpKeyDown(note, vel); return; }
     if (sus.pending.has(note)) { sus.pending.delete(note); noteOffNow(note); } // re-striking a sustained note restarts it
   }
+  mfKey(note, true);
   const layers = layersFor(note, vel); if (!layers.length) return;
   const gen = gens[note] = (gens[note] || 0) + 1;
   audio(); await Promise.all(layers.map(l => ensureAudio(l.sample)));
@@ -3607,15 +3698,16 @@ function applyStages(fs, stages, t, tc) {
 // a voice's filter: six biquads in series. Filter envelope: jumps to freq + env and glides back over `decay`.
 // stages a type really uses (the rest of filterStages' output is flat padding)
 const stageCount = t => isMorph(t) ? F_STAGES : ({ lp2: 1, lp4: 2, lp6: 3, hp2: 1, hp4: 2, bp: 2, notch: 1, eq: 1, phaser: 4, flanger: 6 }[t] || 0);
+// the filter envelope for the voice filter worklet: base shape, peak shape (+ env amount) and attack/decay/sustain/release
+const fenvMsg = (spec, n) => { const env = (spec.env || 0) / 100, base = filterStages(spec).slice(0, n);
+  return { base, peak: env ? filterStages(spec, env).slice(0, n) : base, a: spec.fa || 0, d: spec.decay ?? .8, s: (spec.fs || 0) / 100, r: spec.fr ?? .3 }; };
 function makeVoiceFilter(c, spec, t, channels = 1) {
   if (WK.ok) {
     const n = stageCount(spec.type); if (!n) return null;
-    const env = (spec.env || 0) / 100;
-    const init = env ? { stages: filterStages(spec, env).slice(0, n), then: { stages: filterStages(spec).slice(0, n), atTime: (t || c.currentTime) + .004, tc: Math.max(.01, (spec.decay ?? .8) / 3) } }
-                     : { stages: filterStages(spec).slice(0, n) };
+    const init = { fenv: fenvMsg(spec, n) };
     const node = new AudioWorkletNode(c, 'exw-vfilter', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [channels], channelCount: channels, channelCountMode: 'explicit', channelInterpretation: 'speakers', processorOptions: init });
     const det = node.parameters.get('detune');
-    return { input: node, output: node, fs: [{ detune: det }], n, spec, worklet: node, setStages: (st, ramp) => node.port.postMessage({ stages: st, ramp }), kill: () => node.port.postMessage({ kill: 1 }) };
+    return { input: node, output: node, fs: [{ detune: det }], n, spec, worklet: node, setStages: (st, ramp) => node.port.postMessage({ stages: st, ramp }), setSpec: sp => node.port.postMessage({ fenv: fenvMsg(sp, n) }), release: () => node.port.postMessage({ release: 1 }), kill: () => node.port.postMessage({ kill: 1 }) };
   }
   const n = stageCount(spec.type); if (!n) return null;
   const fs = Array.from({ length: n }, () => c.createBiquadFilter());
@@ -3725,7 +3817,7 @@ function stopMod(v, at) { (v.modEnvs || []).forEach(x => { try { x.cs.stop(at); 
 const fState = { type: 'bypass', freq: 70, res: 20, env: 0, decay: .8, usePreset: true };
 // with "Preset filters" on, the Filter knobs move the preset's own filter: cutoff and resonance shift every voice's
 // filter by the same amount, and the envelope knobs add a filter sweep on top. They reset when you change preset.
-const P_OFS = () => ({ freq: 0, res: 0, env: 0, decay: .8 });
+const P_OFS = () => ({ freq: 0, res: 0, env: 0, decay: .8, fa: 0, fs: 0, fr: .3 });
 fState.pOfs = P_OFS();
 const presetFiltMode = () => !curLayer() && fState.usePreset && state.current?.type === 'preset';
 function withPresetOfs(s) {
@@ -3733,7 +3825,7 @@ function withPresetOfs(s) {
   const o = fState.pOfs, c = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   // cutoff moves as a pitch shift of the whole filter (presetCents) so it also works when the preset's own cords
   // hold the filter open; a Z-plane morph moves its morph position instead
-  return { ...s, freq: isMorph(s.type) ? c(s.freq + o.freq, 0, 100) : s.freq, res: c(s.res + o.res, 0, 100), env: o.env, decay: o.decay };
+  return { ...s, freq: isMorph(s.type) ? c(s.freq + o.freq, 0, 100) : s.freq, res: c(s.res + o.res, 0, 100), env: o.env, decay: o.decay, fa: o.fa || 0, fs: o.fs || 0, fr: o.fr ?? .3 };
 }
 // the Frequency knob's shift in cents for a preset voice (100 knob steps = the 9-octave range)
 const presetCents = l => (!l.ly && l.vfilt && fState.usePreset && !isMorph(presetSpec(l.vfilt)?.type)) ? fState.pOfs.freq * 1200 * Math.log2(500) / 100 : 0;
@@ -3939,8 +4031,8 @@ function updateLiveNow() {
     if (v.vf && chg('pc', presetCents(l))) v.vf.fs.forEach(f => { f.detune.cancelScheduledValues(t); f.detune.setTargetAtTime((v.filtBase || 0) + c.pc, t, .02); });
     if (v.vf) {
       const sp = specFor(l), stages = filterStages(sp.type === 'bypass' ? { type: 'bypass', freq: 70, res: 0 } : sp).slice(0, v.vf.worklet ? v.vf.n : v.vf.fs.length);
-      if (chg('f', JSON.stringify(stages))) {
-        if (v.vf.worklet) v.vf.setStages(stages, .05);
+      if (chg('f', JSON.stringify(stages) + (v.vf.worklet ? [sp.env, sp.fa, sp.decay, sp.fs, sp.fr].join() : ''))) {
+        if (v.vf.worklet) v.vf.setSpec(sp.type === 'bypass' ? { type: 'bypass', freq: 70, res: 0 } : sp);
         else { v.vf.fs.forEach(f => { f.frequency.cancelScheduledValues(t); f.gain.cancelScheduledValues(t); f.Q.cancelScheduledValues(t); }); applyStages(v.vf.fs, stages, t, .02); }
       }
     }
@@ -4055,6 +4147,7 @@ function stopVoices(note, list, at) {
     gp.linearRampToValueAtTime(v.amp * Math.max(0, v.env[4].l) / 100, t + r1); gp.linearRampToValueAtTime(0, t + r1 + r2);
     v.gpts.push([t + r1, v.amp * Math.max(0, v.env[4].l) / 100], [t + r1 + r2, 0]);
     v.srcs.forEach(x => { try { x.stop(t + r1 + r2 + .05); } catch {} });
+    v.vf?.release?.();
     releaseMod(v, t);
   }
 }
@@ -4067,6 +4160,7 @@ function noteOff(note) {
 function noteOffNow(note, from, at) {
   if (from !== 'arp' && perf.arp !== 'off') { arpKeyUp(note); keyEl(note)?.classList.remove('on'); return; }
   gens[note] = (gens[note] || 0) + 1;
+  mfKey(note, false);
   if (ctx) monoOff(note);
   const l = voices.get(note); if (l && ctx) stopVoices(note, l.slice(), at);
   keyEl(note)?.classList.remove('on');

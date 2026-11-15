@@ -192,7 +192,7 @@ bool Engine::baseSpec (const NoteVoice& nv, FiltSpec& out) const {
         if (out.type != F_BYPASS) {
             auto c = [] (float v, float lo, float hi) { return std::max (lo, std::min (hi, v)); };
             if (out.type == F_MORPH) out.freq = c (out.freq + prog->ofsFreq, 0, 100);
-            out.res = c (out.res + prog->ofsRes, 0, 100); out.env = prog->ofsEnv; out.decay = prog->ofsDecay;
+            out.res = c (out.res + prog->ofsRes, 0, 100); out.env = prog->ofsEnv; out.decay = prog->ofsDecay; out.fa = prog->ofsA; out.fs = prog->ofsS; out.fr = prog->ofsR;
         }
     } else if (prog) out = prog->filt;
     else return false;
@@ -200,30 +200,65 @@ bool Engine::baseSpec (const NoteVoice& nv, FiltSpec& out) const {
     return true;
 }
 
-// start: the note's filter (jumping to freq + env amount and gliding back over the decay); else a live change
+// the note's filter: base and peak shapes and its envelope (start), or new shapes after a knob move (live)
 void Engine::voiceFilter (NoteVoice& nv, bool start) {
     FiltSpec sp; if (! baseSpec (nv, sp)) { if (start) nv.nStages = 0; return; }
     const Slot* sl = slotOf (nv);
     nv.presetCents = (! (sl && sl->layer) && nv.vd && nv.vd->hasFilter && sl && sl->isPreset && prog && prog->usePreset && sp.type != F_MORPH) ? prog->ofsFreq * 1200.0f * std::log2 (500.0f) / 100.0f : 0.0f;
     int used = 0;
+    if (! start && ! nv.nStages) return;
+    if (! start && sp.type == F_BYPASS) { sp.freq = 70; sp.res = 0; sp.env = 0; }
+    StageSpec base[6], peak[6]; filterStages (sp, 0, base, used);
+    if (start) { nv.nStages = used; if (! used) return; }
+    const float env = sp.env / 100.0f; int u2;
+    if (env != 0) filterStages (sp, env, peak, u2); else for (int i = 0; i < 6; ++i) peak[i] = base[i];
+    nv.feA = std::max (0.0f, sp.fa); nv.feD = std::max (.01f, sp.decay); nv.feS = std::max (0.0f, std::min (1.0f, sp.fs / 100.0f)); nv.feR = std::max (.005f, sp.fr);
+    for (int i = 0; i < 6; ++i) { nv.ebT[i] = base[i]; nv.epT[i] = peak[i]; }
     if (start) {
-        StageSpec base[6]; filterStages (sp, 0, base, used);
-        nv.nStages = used; if (! used) return;
-        const float env = sp.env / 100.0f;
-        if (env != 0) {
-            int u2; filterStages (sp, env, nv.stages, u2);
-            for (int i = 0; i < 6; ++i) { nv.stFrom[i] = nv.stages[i]; nv.stTo[i] = base[i]; }
-            nv.gliding = true; nv.glideExp = true; nv.stK = 0; nv.stDelay = (int) std::lround (.004 * sr); nv.stTc = std::max (.01f, sp.decay / 3);
-        } else { for (int i = 0; i < 6; ++i) nv.stages[i] = base[i]; nv.gliding = false; }
-        return;
+        for (int i = 0; i < 6; ++i) { nv.eb[i] = base[i]; nv.ep[i] = peak[i]; }
+        // no attack: straight to the peak, held 4 ms, then the decay (the browser version's timing)
+        nv.feStage = 0; nv.fe = nv.feA > 0 ? 0.0f : 1.0f; nv.feHold = nv.feA > 0 ? 0 : (int) std::lround (.004 * sr);
+        nv.fMoving = false;
+        for (int i = 0; i < 6; ++i) nv.stages[i] = env != 0 ? (nv.fe >= 1 ? peak[i] : base[i]) : base[i];
+    } else nv.fMoving = true;
+}
+
+void Engine::advanceEnv (float& e, int& stage, int& hold, float a, float d, float s, float r, double dt) {
+    switch (stage) {
+        case 0: if (a > 0) { e += (float) (dt / a); if (e >= 1) { e = 1; stage = 1; } }
+                else { e = 1; hold -= 1; if (hold <= 0) stage = 1; } break;
+        case 1: e = s + (e - s) * (float) std::exp (-dt / std::max (.0033, d / 3.0)); break;
+        case 2: e *= (float) std::exp (-dt / std::max (.0017, r / 3.0)); break;
+        default: break;
     }
-    if (! nv.nStages) return;
-    if (sp.type == F_BYPASS) { sp.freq = 70; sp.res = 0; }
-    StageSpec to[6]; filterStages (sp, 0, to, used);
-    bool same = true; for (int i = 0; i < nv.nStages; ++i) { const auto& a = nv.gliding ? nv.stTo[i] : nv.stages[i]; if (a.t != to[i].t || a.f != to[i].f || a.g != to[i].g || a.q != to[i].q) same = false; }
-    if (same) return;
-    for (int i = 0; i < 6; ++i) { nv.stFrom[i] = nv.stages[i]; nv.stTo[i] = to[i]; }
-    nv.gliding = true; nv.glideExp = false; nv.stK = 0; nv.stDelay = 0; nv.stKStep = 16.0 / (.05 * sr);
+}
+
+bool Engine::filterStep (NoteVoice& nv, int m) {
+    if (! nv.nStages) return false;
+    bool moved = false;
+    if (nv.fMoving) {   // glide base and peak to the new shapes (about 15 ms)
+        const float k = 1.0f - (float) std::exp (-(double) m / (.015 * sr)); bool done = true;
+        auto mv = [&] (StageSpec& c, const StageSpec& t) {
+            c.t = t.t; const float lf = std::log (c.f), lt = std::log (t.f);
+            if (std::fabs (lt - lf) > 1e-4f || std::fabs (t.g - c.g) > 1e-4f || std::fabs (t.q - c.q) > 1e-4f) { done = false;
+                c.f = std::exp (lf + (lt - lf) * k); c.g += (t.g - c.g) * k; c.q += (t.q - c.q) * k; } else c = t; };
+        for (int i = 0; i < nv.nStages; ++i) { mv (nv.eb[i], nv.ebT[i]); mv (nv.ep[i], nv.epT[i]); }
+        if (done) nv.fMoving = false;
+        moved = true;
+    }
+    const float before = nv.fe; const int st0 = nv.feStage;
+    if (nv.feStage == 0 && nv.feA <= 0) { nv.feHold -= m; nv.fe = 1; if (nv.feHold <= 0) nv.feStage = 1; }
+    else { int dummy = 1; advanceEnv (nv.fe, nv.feStage, dummy, nv.feA, nv.feD, nv.feS, nv.feR, (double) m / sr); }
+    if (std::fabs (nv.fe - before) > 1e-5f || st0 != nv.feStage) moved = true;
+    if (! moved) return false;
+    bool same = true;
+    for (int i = 0; i < nv.nStages; ++i) { const auto& A = nv.eb[i]; const auto& P = nv.ep[i]; if (A.f != P.f || A.g != P.g || A.q != P.q) { same = false; break; } }
+    for (int i = 0; i < nv.nStages; ++i) {
+        const auto& A = nv.eb[i]; const auto& P = nv.ep[i]; auto& S = nv.stages[i];
+        if (same) { S = A; continue; }
+        S.t = A.t; S.f = std::exp (std::log (A.f) + (std::log (P.f) - std::log (A.f)) * nv.fe); S.g = A.g + (P.g - A.g) * nv.fe; S.q = A.q + (P.q - A.q) * nv.fe;
+    }
+    return true;
 }
 
 // Web Audio's BiquadFilterNode formulas (lowpass/highpass Q in dB), so filters match the browser version
@@ -311,7 +346,7 @@ void Engine::startNote (int note, int vel, const Voice& v, const Zone& z, int gl
     voiceFilter (nv, true);
     nv.filtMod = false; for (auto& r : nv.routes) if (r.dst == DST_FILT) nv.filtMod = true;
     for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], nv.fixedFilt + nv.presetCents);
-    nv.lastFiltCents = nv.fixedFilt + nv.presetCents;
+    nv.lastFiltCents = nv.fixedFilt + nv.presetCents; nv.presetNow = nv.presetCents;
     nv.progVer = prog ? prog->version : -1;
     nv.liveCents = nv.liveCents0; nv.lyGT = nv.lyG;
     // the panel's live values
@@ -344,6 +379,7 @@ void Engine::releaseVoice (NoteVoice& nv) {
     const float from = envLevel (nv);
     nv.releasing = true; nv.envRel = true; nv.relFrom = from; nv.relT = 0;
     for (auto& me : nv.menv) if (me.n) { me.rel = true; me.relFrom = me.v; me.relT = 0; }
+    nv.feStage = 2;
 }
 
 float Engine::envLevel (const NoteVoice& nv) const {
@@ -385,6 +421,7 @@ void Engine::fgAdvance (const FgDef& f, FgRun& r, double dt) {
 
 // ---------- notes ----------
 void Engine::noteOn (int note, int vel) {
+    if (mfHeld++ == 0) mfEStage = 0;   // the master filter envelope starts with the first key down
     if (note < 0 || note > 127) return;
     vel = std::max (1, std::min (127, vel));
     susHeld[(size_t) note] = true;
@@ -419,6 +456,7 @@ float Engine::slotLevel (int i) const {
 }
 
 void Engine::noteOff (int note) {
+    if (mfHeld > 0 && --mfHeld == 0) mfEStage = 2;
     if (note < 0 || note > 127) return;
     susHeld[(size_t) note] = false;
     if (sustain) { susPending[(size_t) note] = true; return; }
@@ -502,6 +540,7 @@ int Engine::programChange (int pc) const {
     return idx >= 0 && idx < (int) bank->presets.size() ? idx : -1;
 }
 void Engine::allNotesOff() {
+    mfHeld = 0; if (mfEStage < 2) mfEStage = 2;
     sustain = false; std::fill (susPending.begin(), susPending.end(), false); std::fill (susHeld.begin(), susHeld.end(), false);
     for (auto& v : voices) if (v.active) releaseVoice (v);
     for (auto& g : monoGroups) g.held.clear();
@@ -628,21 +667,15 @@ void Engine::renderChunk (float* L, float* R, int n) {
             pan += nv.lyPan;
             pan = std::max (-1.0f, std::min (1.0f, pan));
             filt += nv.presetCents;
-            // the filter's stage settings glide (filter envelope, knob moves)
-            if (nv.gliding && nv.nStages) {
-                if (nv.stDelay > 0) nv.stDelay -= m;
-                else {
-                    nv.stK = nv.glideExp ? 1 - (1 - nv.stK) * std::exp (-(double) m / (nv.stTc * sr)) : std::min (1.0, nv.stK + nv.stKStep * m / 16.0);
-                    for (int i = 0; i < nv.nStages; ++i) { const auto& A = nv.stFrom[i]; const auto& Z = nv.stTo[i]; auto& S = nv.stages[i];
-                        S.t = Z.t; S.f = (float) std::exp (std::log (A.f) + (std::log (Z.f) - std::log (A.f)) * nv.stK); S.g = (float) (A.g + (Z.g - A.g) * nv.stK); S.q = (float) (A.q + (Z.q - A.q) * nv.stK); }
-                    if (nv.stK >= .9995) { for (int i = 0; i < 6; ++i) nv.stages[i] = nv.stTo[i]; nv.gliding = false; }
-                    nv.lastFiltCents = 1e9f;   // new coefficients
-                }
-            }
+            // the filter envelope and knob moves (new stage settings for this little block)
+            const bool stDirty = filterStep (nv, m);
+            // the preset cutoff shift glides too (no steps while the knob turns)
+            nv.presetNow += (nv.presetCents - nv.presetNow) * (1.0f - (float) std::exp (-(double) m / (.012 * sr)));
+            filt += nv.presetNow - nv.presetCents;
             // the cutoff target for the end of this little block; fast sweeps are followed sample by sample
             const float filtFrom = nv.lastFiltCents;
             const bool filtFast = nv.nStages && std::fabs (filt - filtFrom) > 3.0f;
-            if (! filtFast && nv.nStages && std::fabs (filt - nv.lastFiltCents) > .25f) { for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], filt); nv.lastFiltCents = filt; }
+            if (! filtFast && nv.nStages && (stDirty || std::fabs (filt - nv.lastFiltCents) > .25f)) { for (int i = 0; i < nv.nStages; ++i) setBiquad (nv.bq[i], nv.stages[i], filt); nv.lastFiltCents = filt; }
             // per-copy increments
             const Sample& s = *nv.s; const int nc = (int) nv.copies.size();
             double inc[8];
@@ -715,9 +748,11 @@ void Engine::renderChunk (float* L, float* R, int n) {
     if (prog && prog->patch && prog->mf.type != F_BYPASS) {
         if (mfVer != prog->version) { int used; filterStages (prog->mf, 0, mfSt, used); mfN = 6; mfVer = prog->version; mfLast = 1e9f; }
         const float depth = std::pow (prog->mfDepth / 100.0f, 2.0f) * 3600.0f;
+        const auto& M = prog->mf; const float envC = M.env / 100.0f * 1200.0f * std::log2 (500.0f);
         for (int base = 0; base < n; base += SUB) {
             const int m = std::min (SUB, n - base);
-            const float c = depth * (float) std::sin (2 * PI * mfPh); mfPh += prog->mfRate * m / sr; mfPh -= std::floor (mfPh);
+            int hold = 1; advanceEnv (mfE, mfEStage, hold, std::max (.003f, M.fa), std::max (.01f, M.decay), std::max (0.0f, std::min (1.0f, M.fs / 100.0f)), std::max (.005f, M.fr), (double) m / sr);
+            const float c = depth * (float) std::sin (2 * PI * mfPh) + envC * mfE; mfPh += prog->mfRate * m / sr; mfPh -= std::floor (mfPh);
             if (std::fabs (c - mfLast) > .25f) { for (int i = 0; i < mfN; ++i) setBiquad (mfBq[i], mfSt[i], c); mfLast = c; }
             for (int i = base; i < base + m; ++i) {
                 double xl = L[i], xr = R[i];
